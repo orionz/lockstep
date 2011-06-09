@@ -20,8 +20,7 @@ start_link(Url, Digest, Dets) -> gen_server:start_link(?MODULE, [Url, Digest, De
 ets(Pid) -> gen_server:call(Pid,ets).
 
 %% handle URL path that does not end in '/'
-%% handle non-chunked responses
-%% handle multiline chunks
+%% handle redirects
 
 init([Uri, Digest, DetsFile]) when is_list(Uri) and is_function(Digest) ->
   {http,[],Host, Port, Path, []} = http_uri:parse(Uri),
@@ -41,9 +40,11 @@ handle_info({http, Sock, Http}, State) ->
   State2 = case Http of
     { http_response, {1,1}, 200, <<"OK">> } ->
       State;
-    { http_header, _, 'Content-Length', _,  Size } ->
+    { http_header, _, _Key = 'Content-Length', _,  Size } ->
+      io:format("Header: ~p: ~p~n",[_Key, Size]),
       State#state{ contentlength=list_to_integer(binary_to_list(Size)) };
-    { http_header, _, 'Transfer-Encoding', _,  <<"chunked">> } ->
+    { http_header, _, _Key = 'Transfer-Encoding', _,  _Value = <<"chunked">> } ->
+      io:format("Header: ~p: ~p~n",[_Key, _Value]),
       State#state{ transfer=chunked };
     { http_header, _, _Key, _, _Value } ->
       io:format("Header: ~p: ~p~n",[_Key, _Value]),
