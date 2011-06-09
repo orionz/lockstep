@@ -54,6 +54,8 @@ handle_info({http, Sock, Http}, State) ->
   end,
   inet:setopts(Sock, [{active, once}]),
   {noreply, State2};
+handle_info({tcp, _Sock, <<"0\r\n">> }, #state{transfer=chunked}=State) ->
+  {noreply, disconnect(State) };
 handle_info({tcp, Sock, Line}, #state{transfer=chunked}=State) ->
   Size = read_chunk_size(Line),
   Data = read_chunk(Sock, Size),
@@ -65,10 +67,7 @@ handle_info({tcp, Sock, Line}, State) ->
   process_chunk(Line, State),
   case Remaining < 1 of
     true ->
-      io:format("closing connection~n"),
-      gen_tcp:close(Sock),
-      erlang:send_after(3000, self(), connect),
-      {noreply, State#state{socket=null}};
+      {noreply, disconnect(State) };
     false ->
       inet:setopts(Sock, [{active, once}, { packet, line }]),
       {noreply, State#state{contentlength=Remaining}}
@@ -151,6 +150,12 @@ setup_tables(Filename) ->
   {ok, Dets} = dets:open_file(Filename, []),
   Ets = dets:to_ets(Dets, Ets),
   { Ets, Dets }.
+
+disconnect(State) ->
+  io:format("closing connection~n"),
+  gen_tcp:close(State#state.socket),
+  erlang:send_after(3000, self(), connect),
+  State#state{socket=null}.
 
 connect(State) ->
   Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
