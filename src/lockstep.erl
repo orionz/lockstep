@@ -7,7 +7,7 @@
 
 -export([start/2, start/3, start_link/2, start_link/3, ets/1 ]).
 
--record(state, { socket, ets, dets, host, port, path, digest, transfer, contentlength }).
+-record(state, { socket, ets, dets, host, port, path, digest, transfer, contentlength, writes=0 }).
 
 start(Url, Digest) -> start(Url, Digest, null).
 
@@ -26,6 +26,7 @@ init([Uri, Digest, DetsFile]) when is_list(Uri) and is_function(Digest) ->
   {http,[],Host, Port, Path, []} = http_uri:parse(Uri),
   { Ets, Dets } = setup_tables(DetsFile),
   erlang:send(self(), connect),
+  erlang:send_after(10000, self(), stats),
   { ok, #state{ets=Ets, dets=Dets, host=Host, port=Port, path=Path, digest=Digest } }.
 
 handle_call(ets, _From, State) ->
@@ -57,26 +58,30 @@ handle_info({http, Sock, Http}, State) ->
   {noreply, State2};
 handle_info({tcp, _Sock, <<"0\r\n">> }, #state{transfer=chunked}=State) ->
   {noreply, disconnect(State) };
-handle_info({tcp, Sock, Line}, #state{transfer=chunked}=State) ->
+handle_info({tcp, Sock, Line}, #state{writes=Writes, transfer=chunked}=State) ->
   Size = read_chunk_size(Line),
   Data = read_chunk(Sock, Size),
   process_chunk(Data, State),
-  {noreply, State};
-handle_info({tcp, Sock, Line}, State) ->
+  {noreply, State#state{writes=Writes+1}};
+handle_info({tcp, Sock, Line}, #state{writes=Writes}=State) ->
   Size = size(Line),
   Remaining = State#state.contentlength - Size,
   process_chunk(Line, State),
   case Remaining < 1 of
     true ->
-      {noreply, disconnect(State) };
+      {noreply, disconnect(State#state{writes=Writes+1}) };
     false ->
       inet:setopts(Sock, [{active, once}, { packet, line }]),
-      {noreply, State#state{contentlength=Remaining}}
+      {noreply, State#state{contentlength=Remaining, writes=Writes+1}}
   end;
 handle_info({tcp_closed, _Sock}, State) ->
   {noreply, connect(State)};
 handle_info(connect, State) ->
   {noreply, connect(State)};
+handle_info(stats, State) ->
+  io:format("Stats: ~p writes/sec~n",[State#state.writes/10]),
+  erlang:send_after(10000, self(), stats),
+  {noreply, State#state{writes=0}};
 handle_info(Message, State) ->
   io:format("unhandled info: ~p~n", Message),
   {noreply, State}.
