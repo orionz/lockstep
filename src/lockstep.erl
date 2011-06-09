@@ -7,7 +7,7 @@
 
 -export([start/2, start/3, start_link/2, start_link/3, ets/1 ]).
 
--record(state, { socket, ets, dets, host, port, path, digest, transfer }).
+-record(state, { socket, ets, dets, host, port, path, digest, transfer, contentlength }).
 
 start(Url, Digest) -> start(Url, Digest, null).
 
@@ -41,9 +41,12 @@ handle_info({http, Sock, Http}, State) ->
   State2 = case Http of
     { http_response, {1,1}, 200, <<"OK">> } ->
       State;
-    { http_header, 'Transfer-Encoding',  <<"chunked">> } ->
+    { http_header, _, 'Content-Length', _,  Size } ->
+      State#state{ contentlength=list_to_integer(binary_to_list(Size)) };
+    { http_header, _, 'Transfer-Encoding', _,  <<"chunked">> } ->
       State#state{ transfer=chunked };
-    { http_header, _, _Key, _, _Value } -> 
+    { http_header, _, _Key, _, _Value } ->
+      io:format("Header: ~p: ~p~n",[_Key, _Value]),
       State;
     http_eoh ->
       inet:setopts(Sock, [{packet, line}]),
@@ -52,22 +55,30 @@ handle_info({http, Sock, Http}, State) ->
   inet:setopts(Sock, [{active, once}]),
   {noreply, State2};
 handle_info({tcp, Sock, Line}, #state{transfer=chunked}=State) ->
-  io:format("Chunk ~p~n", Line),
   Size = read_chunk_size(Line),
   Data = read_chunk(Sock, Size),
   process_chunk(Data, State),
   {noreply, State};
 handle_info({tcp, Sock, Line}, State) ->
-  io:format("Normal Line ~p~n", Line),
+  Size = size(Line),
+  Remaining = State#state.contentlength - Size,
   process_chunk(Line, State),
-  inet:setopts(Sock, [{active, once}]),
-  {noreply, State};
+  case Remaining < 1 of
+    true ->
+      io:format("closing connection~n"),
+      gen_tcp:close(Sock),
+      erlang:send_after(3000, self(), connect),
+      {noreply, State#state{socket=null}};
+    false ->
+      inet:setopts(Sock, [{active, once}, { packet, line }]),
+      {noreply, State#state{contentlength=Remaining}}
+  end;
 handle_info({tcp_closed, _Sock}, State) ->
   {noreply, connect(State)};
 handle_info(connect, State) ->
   {noreply, connect(State)};
 handle_info(Message, State) ->
-  io:format("UNHANDLED INFO ~p~n", Message),
+  io:format("unhandled info: ~p~n", Message),
   {noreply, State}.
 
 terminate(_Reason, _State) -> ok.
@@ -148,7 +159,7 @@ connect(State) ->
     {ok, Sock} ->
       io:format("ok~n"),
       gen_tcp:send(Sock, [ <<"GET ">> , State#state.path, integer_to_list(head(State)), <<" HTTP/1.1\r\nHost: ">>, State#state.host ,<<"\r\n\r\n">> ]),
-      State#state{socket=Sock};
+      State#state{socket=Sock, transfer=null};
     {error, Error } ->
       io:format("error/~p~n",[Error]),
       erlang:send_after(3000, self(), connect),
