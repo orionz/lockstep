@@ -117,7 +117,7 @@ analyze([], Action, Time) ->
 
 head(State) ->
   case ets:lookup(State#state.ets, lockstep_head) of
-    [{ lockstep_head, Time }] -> Time;
+    [{ lockstep_head, Time }] -> Time - 1; %% 1 second before 
     _ -> 0
   end.
 
