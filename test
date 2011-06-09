@@ -1,0 +1,7 @@
+#!/usr/bin/env escript 
+%%! -pa ebin -pa deps/mochiweb/ebin
+
+main(_) ->
+  lockstep_test:test(),
+  receive ok -> ok end.
+

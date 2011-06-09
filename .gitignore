@@ -1,0 +1,4 @@
+deps
+*.beam
+lockstep.app
+lockstep.dets

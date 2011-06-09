@@ -1,0 +1,5 @@
+{application, lockstep,
+ [
+  {description, "follows mg replication"},
+  {vsn, "0.1"}
+ ]}.
