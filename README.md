@@ -6,7 +6,7 @@ lockstep is a client for the lockstep protocol for keeping up to date on a set o
 
 Given an http endpoint, pull down records as a list of tuples expressed in json, one per line. 
 
-    $ curl http://0.0.0.0:4567/psmgr/998
+    $ curl http://0.0.0.0:4567/servers/998
     {"id":123,"updated_at":999,"deleted_at":null,"ip":"0.0.0.0","port":1234}
     {"id":124,"updated_at":1000,"deleted_at":1000,"ip":"0.0.0.0","port":1234}
     $
@@ -31,7 +31,7 @@ received proplists into tuples.  The third (optional) firld is the name of the
 dets table to save data to.  If used, lockstep will pick up the stream from
 where the dets table left off rather that resyncing the whole data set.
 
-    {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/psmgr/", fun digest/1, "psmgr.dets"),
+    {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/servers/", fun digest/1, "servers.dets"),
 
 Lockstep will track the lockstep endpoint and keep data in an ets table.  The
 ets table can be accessed like this.
