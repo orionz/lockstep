@@ -60,19 +60,18 @@ handle_info({tcp, _Sock, <<"0\r\n">> }, #state{transfer=chunked}=State) ->
   {noreply, disconnect(State) };
 handle_info({tcp, Sock, Line}, #state{writes=Writes, transfer=chunked}=State) ->
   Size = read_chunk_size(Line),
-  Data = read_chunk(Sock, Size),
-  process_chunk(Data, State),
-  {noreply, State#state{writes=Writes+1}};
+  State2 = read_chunk(Sock, Size, State),
+  {noreply, State2#state{writes=Writes+1}};
 handle_info({tcp, Sock, Line}, #state{writes=Writes}=State) ->
   Size = size(Line),
   Remaining = State#state.contentlength - Size,
-  process_chunk(Line, State),
+  State2 = process_chunk(Line, State),
   case Remaining < 1 of
     true ->
-      {noreply, disconnect(State#state{writes=Writes+1}) };
+      {noreply, disconnect(State2#state{writes=Writes+1}) };
     false ->
       inet:setopts(Sock, [{active, once}, { packet, line }]),
-      {noreply, State#state{contentlength=Remaining, writes=Writes+1}}
+      {noreply, State2#state{contentlength=Remaining, writes=Writes+1}}
   end;
 handle_info({tcp_closed, _Sock}, State) ->
   {noreply, connect(State)};
@@ -94,16 +93,21 @@ read_chunk_size(Line) ->
   { ok, [Bytes], [] } = io_lib:fread("~16u\r\n", binary_to_list(Line)),
   Bytes.
 
-read_chunk(Socket, Bytes) ->
+read_chunk(Socket, Bytes, State) ->
   inet:setopts(Socket, [{active, false}, { packet, raw }]),
-  { ok, <<Data:Bytes/binary,"\r\n">> } = gen_tcp:recv(Socket, Bytes + 2),
-  inet:setopts(Socket, [{active, once}, { packet, line }]),
-  Data.
+  case gen_tcp:recv(Socket, Bytes + 2) of
+    { ok, <<Data:Bytes/binary,"\r\n">> } ->
+      inet:setopts(Socket, [{active, once}, { packet, line }]),
+      process_chunk(Data, State);
+    _ ->
+      disconnect(State)
+  end.
 
 process_chunk(Chunk, State) ->
   case mochijson2:decode(Chunk) of
     { struct, Props } -> analyze(Props, State)
-  end.
+  end,
+  State.
 
 analyze(Props, State) ->
   { ok, Action, Time } = analyze(Props, set, 0),
@@ -112,7 +116,7 @@ analyze(Props, State) ->
     delete -> delete(Time, (State#state.digest)(Props), State)
   end.
 
-analyze([{<<"deleted_at">>, Time} | Props], _Action, Time) when is_integer(Time) ->
+analyze([{<<"deleted_at">>, Time} | Props], _Action, _Time) when is_integer(Time) ->
   analyze(Props, delete, Time);
 analyze([{<<"updated_at">>, Time} | Props], Action, _Time) when is_integer(Time) ->
   analyze(Props, Action, Time);
@@ -123,7 +127,7 @@ analyze([], Action, Time) ->
 
 head(State) ->
   case ets:lookup(State#state.ets, lockstep_head) of
-    [{ lockstep_head, Time }] -> Time - 1; %% 1 second before 
+    [{ lockstep_head, Time }] -> Time - 1; %% 1 second before
     _ -> 0
   end.
 
