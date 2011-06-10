@@ -30,7 +30,7 @@ endpoint to pull data from.  The second argument is a funtion to transform the
 received proplists into tuples.  The third is the name of the dets table to
 save data to.
 
-    {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/psmgr/", fun digest/1, "lockstep.dets"),
+    {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/psmgr/", fun digest/1, "psmgr.dets"),
 
 Lockstep will track the lockstep endpoint and keep data in an ets table.  The
 ets table can be accessed like this.

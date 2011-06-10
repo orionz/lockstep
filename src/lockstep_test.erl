@@ -9,7 +9,7 @@
 test() ->
   inets:start(),
 %  {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/psmgr/", fun digest/1),
-  {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/psmgr/", fun digest/1, "lockstep.dets"),
+  {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/psmgr/", fun digest/1, "psmgr.dets"),
   Ets = lockstep:ets(Pid),
   io:format("Have ets table: ~p~n",[Ets]),
   io:format("Dump -> ~p~n",[ets:tab2list(Ets)]),
