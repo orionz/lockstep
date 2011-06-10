@@ -22,12 +22,16 @@ ets(Pid) -> gen_server:call(Pid,ets).
 %% handle URL path that does not end in '/'
 %% handle redirects
 
-init([Uri, Digest, DetsFile]) when is_list(Uri) and is_function(Digest) ->
+init([Uri, Digest, DetsFile]) when is_list(Uri) and is_tuple(Digest) ->
   {http,[],Host, Port, Path, []} = http_uri:parse(Uri),
   { Ets, Dets } = setup_tables(DetsFile),
   erlang:send(self(), connect),
   erlang:send_after(10000, self(), stats),
-  { ok, #state{ets=Ets, dets=Dets, host=Host, port=Port, path=Path, digest=Digest } }.
+  Digest2 = tuple_to_list(Digest),
+  Digest3 = lists:map(fun erlang:atom_to_list/1, Digest2),
+  Digest4 = lists:map(fun erlang:list_to_binary/1, Digest3),
+  io:format("Digest ~p~n",[Digest4]),
+  { ok, #state{ets=Ets, dets=Dets, host=Host, port=Port, path=Path, digest=Digest4 } }.
 
 handle_call(ets, _From, State) ->
     {reply, State#state.ets, State};
@@ -109,21 +113,24 @@ process_chunk(Chunk, State) ->
   end,
   State.
 
-analyze(Props, State) ->
-  { ok, Action, Time } = analyze(Props, set, 0),
+analyze(Props, #state{digest=Digest}=State) ->
+  io:format("PROPS: ~p~n",[Props]),
+  Target = erlang:make_tuple( length(Digest), null),
+  { ok, Action, Time, Record } = X = analyze(Props, set, 0, Digest, Target),
+  io:format("Digested Action: ~p~n",[X]),
   case Action of
-    set -> set(Time, (State#state.digest)(Props), State);
-    delete -> delete(Time, (State#state.digest)(Props), State)
+    set -> set(Time, Record, State);
+    delete -> delete(Time, Record, State)
   end.
 
-analyze([{<<"deleted_at">>, Time} | Props], _Action, _Time) when is_integer(Time) ->
-  analyze(Props, delete, Time);
-analyze([{<<"updated_at">>, Time} | Props], Action, _Time) when is_integer(Time) ->
-  analyze(Props, Action, Time);
-analyze([ _ | Props], Action, Time) ->
-  analyze(Props, Action, Time);
-analyze([], Action, Time) ->
-  { ok, Action, Time }.
+analyze([{<<"deleted_at">>, DeletedAt }=P | Props], _Action, UpdatedAt, Digest, Target) when is_integer(DeletedAt) ->
+  analyze(Props, delete, UpdatedAt, Digest, digest(P, Digest, Target, 1));
+analyze([{<<"updated_at">>, UpdatedAt}=P | Props], Action, _UpdatedAt, Digest, Target) when is_integer(UpdatedAt) ->
+  analyze(Props, Action, UpdatedAt, Digest, digest(P, Digest, Target, 1));
+analyze([ P | Props], Action, UpdatedAt, Digest, Target) ->
+  analyze(Props, Action, UpdatedAt, Digest, digest(P, Digest, Target, 1));
+analyze([], Action, UpdatedAt, _Digest, Target) ->
+  { ok, Action, UpdatedAt, Target }.
 
 head(State) ->
   case ets:lookup(State#state.ets, lockstep_head) of
@@ -131,8 +138,15 @@ head(State) ->
     _ -> 0
   end.
 
+digest({ Key, Value}, [ Key | _ ], Tuple, Index ) ->
+  erlang: setelement( Index, Tuple, Value );
+digest({ Key, Value}, [ _ | Tail ], Tuple, Index ) -> 
+  digest({ Key, Value}, Tail, Tuple, Index + 1 );
+digest(_, [], Tuple, _ ) -> 
+  Tuple.
+
 set(Time, Record, State) ->
-%  io:format("SET ~p ~p~n",[Time, Record]),
+  io:format("SET ~p ~p~n",[Time, Record]),
   ets:insert(State#state.ets, Record),
   ets:insert(State#state.ets, { lockstep_head, Time }),
   set_dets(Time, Record, State#state.dets).
@@ -143,7 +157,7 @@ set_dets(Time, Record, Dets) ->
   dets:insert(Dets, { lockstep_head, Time }).
 
 delete(Time, Record, State) ->
-%  io:format("DEL ~p ~p~n",[Time, Record]),
+  io:format("DEL ~p ~p~n",[Time, Record]),
   ets:delete(State#state.ets, Record),
   ets:insert(State#state.ets, { lockstep_head, Time }),
   delete_dets(Time, Record, State#state.dets).

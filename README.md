@@ -26,12 +26,12 @@ request at time '0' deleted elements may be skipped.
 ## client overview
 
 Call lockstep:start or lockstep:start_link.  The first argument is the http
-endpoint to pull data from.  The second argument is a funtion to transform the
-received proplists into tuples.  The third (optional) firld is the name of the
+endpoint to pull data from.  The second argument the schema of the records to
+be stored locally.  The third (optional) firld is the name of the
 dets table to save data to.  If used, lockstep will pick up the stream from
 where the dets table left off rather that resyncing the whole data set.
 
-    {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/servers/", fun digest/1, "servers.dets"),
+    {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/servers/", {id, ip, port}, "servers.dets"),
 
 Lockstep will track the lockstep endpoint and keep data in an ets table.  The
 ets table can be accessed like this.
