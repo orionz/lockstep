@@ -1,4 +1,3 @@
-
 -module(lockstep).
 -author("Orion Henry <orion@heroku.com>").
 -behaviour(gen_server).
@@ -9,11 +8,11 @@
 
 -record(state, { socket, ets, dets, host, port, path, schema, transfer, contentlength, writes=0 }).
 
-start(Url, Schema) -> start(Url, Schema, null).
+start(Url, Schema) -> start(Url, Schema, undefined).
 
 start(Url, Schema, Dets) -> gen_server:start(?MODULE, [Url, Schema, Dets], []).
 
-start_link(Url, Schema) -> start_link(Url, Schema, null).
+start_link(Url, Schema) -> start_link(Url, Schema, undefined).
 
 start_link(Url, Schema, Dets) -> gen_server:start_link(?MODULE, [Url, Schema, Dets], []).
 
@@ -114,7 +113,7 @@ process_proplist(Props, #state{schema=Schema}=State) ->
   perform_update(Meta, Record, State).
 
 analyze(Props, Schema) ->
-  BlankRecord = erlang:make_tuple( length(Schema), null),
+  BlankRecord = erlang:make_tuple( length(Schema), undefined),
   BlankMeta = { set, 0 },
   analyze(Props, Schema, BlankRecord, BlankMeta).
 
@@ -156,7 +155,7 @@ set(Time, Record, State) ->
   ets:insert(State#state.ets, { lockstep_head, Time }),
   set_dets(Time, Record, State#state.dets).
 
-set_dets(_Time, _Record, null) -> ok;
+set_dets(_Time, _Record, undefined) -> ok;
 set_dets(Time, Record, Dets) ->
   dets:insert(Dets, Record),
   dets:insert(Dets, { lockstep_head, Time }).
@@ -167,13 +166,13 @@ delete(Time, Record, State) ->
   ets:insert(State#state.ets, { lockstep_head, Time }),
   delete_dets(Time, Record, State#state.dets).
 
-delete_dets(_Time, _Record, null) -> ok;
+delete_dets(_Time, _Record, undefined) -> ok;
 delete_dets(Time, Record, Dets) ->
   dets:delete(Dets, Record),
   dets:insert(Dets, { lockstep_head, Time }).
 
-setup_tables(null) ->
-  { ets:new(?MODULE, [ set, protected, { read_concurrency, true } ]), null };
+setup_tables(undefined) ->
+  { ets:new(?MODULE, [ set, protected, { read_concurrency, true } ]), undefined };
 setup_tables(Filename) ->
   Ets = ets:new(?MODULE, [ set, protected, { read_concurrency, true } ]),
   {ok, Dets} = dets:open_file(Filename, []),
@@ -184,7 +183,7 @@ disconnect(State) ->
   io:format("closing connection~n"),
   gen_tcp:close(State#state.socket),
   erlang:send_after(3000, self(), connect),
-  State#state{socket=null}.
+  State#state{socket=undefined}.
 
 digest_schema(Schema) ->
   Schema2 = tuple_to_list(Schema),
@@ -198,10 +197,10 @@ connect(State) ->
     {ok, Sock} ->
       io:format("ok~n"),
       gen_tcp:send(Sock, [ <<"GET ">> , State#state.path, integer_to_list(head(State)), <<" HTTP/1.1\r\nHost: ">>, State#state.host ,<<"\r\n\r\n">> ]),
-      State#state{socket=Sock, transfer=null};
+      State#state{socket=Sock, transfer=undefined};
     {error, Error } ->
       io:format("error/~p~n",[Error]),
       erlang:send_after(3000, self(), connect),
-      State#state{socket=null}
+      State#state{socket=undefined}
   end.
 
