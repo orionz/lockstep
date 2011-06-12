@@ -44,6 +44,9 @@
                 contentlength,
                 writes=0}).
 
+-define(RECONNECT_TIME, 3000).
+-define(STAT_FREQ, 10).
+
 start_link(Uri, Schema) ->
   start_link(Uri, Schema, []).
 
@@ -61,9 +64,8 @@ start_link(Uri, Schema, Opts) when is_list(Uri),
 init([Uri, Schema, Opts]) ->
   State = init_state([{uri, Uri}, {schema, Schema} | Opts]),
   setup_tables(State),
-  erlang:send(self(), connect),
-  erlang:send_after(10000, self(), stats),
-  {ok, State}.
+  erlang:send_after(?STAT_FREQ * 1000, self(), stats),
+  {ok, State, 0}.
 
 handle_call(_Message, _From, State) ->
   {reply, error, State}.
@@ -91,32 +93,45 @@ handle_info({http, Sock, Http}, State) ->
   inet:setopts(Sock, [{active, once}]),
   {noreply, State2};
 handle_info({tcp, _Sock, <<"0\r\n">> }, #state{transfer=chunked}=State) ->
-  {noreply, disconnect(State) };
+  {noreply, disconnect(State), ?RECONNECT_TIME};
 handle_info({tcp, Sock, Line}, #state{writes=Writes, transfer=chunked}=State) ->
   Size = read_chunk_size(Line),
-  State2 = read_chunk(Sock, Size, State),
-  {noreply, State2#state{writes=Writes+1}};
+  case read_chunk(Sock, Size, State) of
+    State2 when is_record(State2, state) ->
+      {noreply, State2#state{writes=Writes+1}};
+    {error, closed} ->
+      {noreply, disconnect(State), ?RECONNECT_TIME}
+  end;
 handle_info({tcp, Sock, Line}, #state{writes=Writes}=State) ->
   Size = size(Line),
   Remaining = State#state.contentlength - Size,
   State2 = process_chunk(Line, State),
   case Remaining < 1 of
     true ->
-      {noreply, disconnect(State2#state{writes=Writes+1}) };
+      {noreply, disconnect(State2#state{writes=Writes+1}), ?RECONNECT_TIME};
     false ->
       inet:setopts(Sock, [{active, once}, { packet, line }]),
       {noreply, State2#state{contentlength=Remaining, writes=Writes+1}}
   end;
 handle_info({tcp_closed, _Sock}, State) ->
-  {noreply, connect(State)};
-handle_info(connect, State) ->
-  {noreply, connect(State)};
+  {noreply, State#state{socket=undefined}, 0};
+handle_info({tcp_error, _Sock, Err}, State) ->
+  io:format("tcp_error/~p~n",[Err]),
+  {noreply, State#state{socket=undefined}, 0};
+handle_info(timeout, #state{socket=undefined}=State) ->
+  case connect(State) of
+    {ok, Sock} ->
+      {noreply, State#state{socket=Sock, transfer=undefined}};
+    Err ->
+      io:format("error/~p~n",[Err]),
+      {noreply, State#state{socket=undefined}, ?RECONNECT_TIME}
+  end;
 handle_info(stats, State) ->
-  io:format("Stats: ~p writes/sec~n",[State#state.writes/10]),
-  erlang:send_after(10000, self(), stats),
-  {noreply, State#state{writes=0}};
+  io:format("Stats: ~p writes/sec~n",[State#state.writes/?STAT_FREQ]),
+  erlang:send_after(?STAT_FREQ * 1000, self(), stats),
+  {noreply, State#state{writes=0}, 0};
 handle_info(Message, State) ->
-  io:format("unhandled info: ~p~n", Message),
+  io:format("unhandled info: ~p~n", [Message]),
   {noreply, State}.
 
 terminate(_Reason, _State) -> ok.
@@ -152,7 +167,7 @@ read_chunk(Socket, Bytes, State) ->
       inet:setopts(Socket, [{active, once}, { packet, line }]),
       process_chunk(Data, State);
     _ ->
-      disconnect(State)
+      {error, closed}
   end.
 
 process_chunk(Chunk, State) ->
@@ -233,7 +248,6 @@ setup_dets(TabName) ->
 disconnect(State) ->
   io:format("closing connection~n"),
   gen_tcp:close(State#state.socket),
-  erlang:send_after(3000, self(), connect),
   State#state{socket=undefined}.
 
 digest_schema(Schema) ->
@@ -243,15 +257,12 @@ digest_schema(Schema) ->
 
 connect(State) ->
   Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
-  io:format("Connecting to http://~s:~p~s~p...",[ State#state.host, State#state.port, State#state.path, head(State) ]),
+  io:format("Connecting to http://~s:~p~s~p...~n",[ State#state.host, State#state.port, State#state.path, head(State) ]),
   case gen_tcp:connect( State#state.host, State#state.port, Opts, 10000) of
     {ok, Sock} ->
       io:format("ok~n"),
-      gen_tcp:send(Sock, [ <<"GET ">> , State#state.path, integer_to_list(head(State)), <<" HTTP/1.1\r\nHost: ">>, State#state.host ,<<"\r\n\r\n">> ]),
-      State#state{socket=Sock, transfer=undefined};
-    {error, Error } ->
-      io:format("error/~p~n",[Error]),
-      erlang:send_after(3000, self(), connect),
-      State#state{socket=undefined}
+      ok = gen_tcp:send(Sock, [ <<"GET ">> , State#state.path, integer_to_list(head(State)), <<" HTTP/1.1\r\nHost: ">>, State#state.host ,<<"\r\n\r\n">> ]),
+      {ok, Sock};
+    {error, Error} ->
+      {error, Error}
   end.
-
