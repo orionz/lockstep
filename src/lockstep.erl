@@ -4,13 +4,9 @@
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--export([start/2, start/3, start_link/2, start_link/3, ets/1 ]).
+-export([start_link/2, start_link/3, ets/1]).
 
 -record(state, { socket, ets, dets, host, port, path, schema, transfer, contentlength, writes=0 }).
-
-start(Url, Schema) -> start(Url, Schema, undefined).
-
-start(Url, Schema, Dets) -> gen_server:start(?MODULE, [Url, Schema, Dets], []).
 
 start_link(Url, Schema) -> start_link(Url, Schema, undefined).
 
