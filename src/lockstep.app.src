@@ -1,5 +1,11 @@
 {application, lockstep,
  [
   {description, "follows mg replication"},
-  {vsn, "0.1"}
+  {vsn, "0.1"},
+  {registered, []},
+  {applications, [
+      kernel,
+      stdlib,
+      sasl
+  ]}
  ]}.

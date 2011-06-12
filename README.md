@@ -7,37 +7,41 @@ lockstep is a client for the lockstep protocol for keeping up to date on a set o
 Given an http endpoint, pull down records as a list of tuples expressed in json, one per line. 
 
     $ curl http://0.0.0.0:4567/servers/998
-    {"id":123,"updated_at":999,"deleted_at":null,"ip":"0.0.0.0","port":1234}
-    {"id":124,"updated_at":1000,"deleted_at":1000,"ip":"0.0.0.0","port":1234}
-    $
+    {"id":123, "updated_at":999, "deleted_at":null, "ip":"0.0.0.0", "port":1234}
+    {"id":124, "updated_at":1000, "deleted_at":1000, "ip":"0.0.0.0", "port":1234}
 
-The response can be finite, or be a chunked response that continues to feed
-updates to the receiver.  The final element of the path endpoint is the most
-recent updated_at time seen and should this only receive records updated since
-that time.
+The response can be finite, or be a chunked response that continues to feed updates to the receiver.  The final element of the path endpoint is the most recent updated_at time seen and only updates equal to or after that time should be received.
 
-All records sent must have an updated_at attribute to identify when they were
-last changed.  Records should always be sent sorted by updated_at.
+All records sent must have an updated_at attribute to identify when they were last changed.  Records should always be sent sorted by updated_at.
 
-All records sent must have a deleted_at attribute which should be null
-normally, or the time at which the tuple was deleted.  If the endpont is
-request at time '0' deleted elements may be skipped.
+All records sent must have a deleted_at attribute which should be null normally, or the time at which the tuple was deleted.  If the endpoint requests time '0' then deleted elements may be skipped.
 
-## client overview
+## Make
 
-Call lockstep:start or lockstep:start_link.  The first argument is the http
-endpoint to pull data from.  The second argument the schema of the records to
-be stored locally.  The third (optional) firld is the name of the
-dets table to save data to.  If used, lockstep will pick up the stream from
-where the dets table left off rather that resyncing the whole data set.
+    $ make get-deps
+    $ make
 
-    {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/servers/", {id, ip, port}, "servers.dets"),
+## API
 
-Lockstep will track the lockstep endpoint and keep data in an ets table.  The
-ets table can be accessed like this.
+    start_link(Uri, Schema) -> Result
+    start_link(Uri, Schema, Opts) -> Result
+      Uri = list() %% http endpoint to pull data from
+      Schema = tuple() %% schema of the records to be stored locally
+      Opts = [Opt]
+      Opt = {table, TabName} | {disk, SyncToDisk} 
+      TabName = atom() %% the name of the ets (and optionally dets) table to which lockstep data is written
+      SyncToDisk = boolean() %% if the options list contains {disk, true}, lockstep will
+                             %% sync its ets table to disk and pick up the stream from where
+                             %% the dets table left off rather that resyncing the whole data set.
+      Result = {ok, pid()} | {error, term()}
 
-    Table = lockstep:ets(Pid),
-    ets:lookup(Table, Key),
+## Run
 
+    $ node server.js
+    Listening on port 4567
 
-
+    $ erl -pa ebin deps/*/ebin
+    1> {ok, Pid}  = lockstep:start_link("http://0.0.0.0:4567/servers/", {id, ip, port}, [{table, servers}, {disk, true}]).
+    {ok, <0.33.0>
+    2> ets:tab2list(servers).
+    [...]

@@ -2,32 +2,42 @@
 -author("Orion Henry <orion@heroku.com>").
 -behaviour(gen_server).
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+-export([init/1, handle_call/3, handle_cast/2,
+         handle_info/2, terminate/2, code_change/3]).
 
--export([start_link/2, start_link/3, ets/1]).
+-export([start_link/2, start_link/3]).
 
--record(state, { socket, ets, dets, host, port, path, schema, transfer, contentlength, writes=0 }).
+-record(state, {socket,
+                tid=?MODULE,
+                disk=false,
+                host,
+                port,
+                path,
+                schema,
+                transfer,
+                contentlength,
+                writes=0}).
 
-start_link(Url, Schema) -> start_link(Url, Schema, undefined).
+start_link(Uri, Schema) ->
+  start_link(Uri, Schema, []).
 
-start_link(Url, Schema, Dets) -> gen_server:start_link(?MODULE, [Url, Schema, Dets], []).
-
-ets(Pid) -> gen_server:call(Pid,ets).
+start_link(Uri, Schema, Opts) when is_list(Uri),
+                                   is_tuple(Schema),
+                                   is_list(Opts) ->
+  gen_server:start_link(?MODULE, [Uri, Schema, Opts], []).
 
 %% handle URL path that does not end in '/'
 %% handle redirects
 
-init([Uri, Schema, DetsFile]) when is_list(Uri) and is_tuple(Schema) ->
-  {http,[],Host, Port, Path, []} = http_uri:parse(Uri),
-  { Ets, Dets } = setup_tables(DetsFile),
+init([Uri, Schema, Opts]) ->
+  State = init_state([{uri, Uri}, {schema, Schema} | Opts]),
+  setup_tables(State),
   erlang:send(self(), connect),
   erlang:send_after(10000, self(), stats),
-  { ok, #state{ets=Ets, dets=Dets, host=Host, port=Port, path=Path, schema=digest_schema(Schema) } }.
+  {ok, State}.
 
-handle_call(ets, _From, State) ->
-    {reply, State#state.ets, State};
 handle_call(_Message, _From, State) ->
-    {reply, error, State}.
+  {reply, error, State}.
 
 handle_cast(_Message, State) ->
   {noreply, State}.
@@ -84,6 +94,23 @@ terminate(_Reason, _State) -> ok.
 
 code_change(_OldVersion, State, _Extra) -> {ok, State}.
 
+init_state(Opts) ->
+  init_state(Opts, #state{}).
+
+init_state([], State) ->
+  State;
+init_state([{table, TabName}|Tail], State) when is_atom(TabName) ->
+  init_state(Tail, State#state{tid=TabName});
+init_state([{disk, Disk}|Tail], State) when is_boolean(Disk) ->
+  init_state(Tail, State#state{disk=Disk});
+init_state([{uri, Uri}|Tail], State) ->
+  {http, [], Host, Port, Path, []} = http_uri:parse(Uri),
+  init_state(Tail, State#state{host=Host, port=Port, path=Path});
+init_state([{schema, Schema}|Tail], State) ->
+  init_state(Tail, State#state{schema=digest_schema(Schema)});
+init_state([_|Tail], State) ->
+  init_state(Tail, State).
+
 read_chunk_size(Line) ->
   { ok, [Bytes], [] } = io_lib:fread("~16u\r\n", binary_to_list(Line)),
   Bytes.
@@ -121,7 +148,7 @@ analyze([], _, Record, Meta) ->
   { ok, Meta, Record }.
 
 head(State) ->
-  case ets:lookup(State#state.ets, lockstep_head) of
+  case ets:lookup(State#state.tid, lockstep_head) of
     [{ lockstep_head, Time }] -> Time - 1; %% 1 second before
     _ -> 0
   end.
@@ -145,35 +172,33 @@ perform_update( { set, Time }, Record, State ) ->
 perform_update( { delete, Time }, Record, State ) ->
   delete(Time, Record, State).
 
-set(Time, Record, State) ->
+set(Time, Record, #state{tid=Tid, disk=Disk}) ->
   io:format("SET ~p ~p~n",[Time, Record]),
-  ets:insert(State#state.ets, Record),
-  ets:insert(State#state.ets, { lockstep_head, Time }),
-  set_dets(Time, Record, State#state.dets).
+  ets:insert(Tid, Record),
+  ets:insert(Tid, {lockstep_head, Time}),
+  Disk andalso set_dets(Time, Record, Tid).
 
-set_dets(_Time, _Record, undefined) -> ok;
-set_dets(Time, Record, Dets) ->
-  dets:insert(Dets, Record),
-  dets:insert(Dets, { lockstep_head, Time }).
+set_dets(Time, Record, Tid) ->
+  dets:insert(Tid, Record),
+  dets:insert(Tid, {lockstep_head, Time}).
 
-delete(Time, Record, State) ->
+delete(Time, Record, #state{tid=Tid, disk=Disk}) ->
   io:format("DEL ~p ~p~n",[Time, Record]),
-  ets:delete(State#state.ets, Record),
-  ets:insert(State#state.ets, { lockstep_head, Time }),
-  delete_dets(Time, Record, State#state.dets).
+  ets:delete_object(Tid, Record),
+  ets:insert(Tid, {lockstep_head, Time}),
+  Disk andalso delete_dets(Time, Record, Tid).
 
-delete_dets(_Time, _Record, undefined) -> ok;
-delete_dets(Time, Record, Dets) ->
-  dets:delete(Dets, Record),
-  dets:insert(Dets, { lockstep_head, Time }).
+delete_dets(Time, Record, Tid) ->
+  dets:delete_object(Tid, Record),
+  dets:insert(Tid, {lockstep_head, Time}).
 
-setup_tables(undefined) ->
-  { ets:new(?MODULE, [ set, protected, { read_concurrency, true } ]), undefined };
-setup_tables(Filename) ->
-  Ets = ets:new(?MODULE, [ set, protected, { read_concurrency, true } ]),
-  {ok, Dets} = dets:open_file(Filename, []),
-  Ets = dets:to_ets(Dets, Ets),
-  { Ets, Dets }.
+setup_tables(#state{tid=TabName, disk=Disk}) when is_atom(TabName) ->
+  TabName = ets:new(TabName, [named_table, set, protected, {read_concurrency, true}]),
+  Disk == true andalso setup_dets(TabName).
+
+setup_dets(TabName) ->
+  {ok, TabName} = dets:open_file(TabName, [{file, atom_to_list(TabName) ++ ".dets"}]),
+  TabName = dets:to_ets(TabName, TabName).
 
 disconnect(State) ->
   io:format("closing connection~n"),
