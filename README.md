@@ -28,11 +28,12 @@ All records sent must have a deleted_at attribute which should be null normally,
       Uri = list() %% http endpoint to pull data from
       Schema = tuple() %% schema of the records to be stored locally
       Opts = [Opt]
-      Opt = {table, TabName} | {disk, SyncToDisk} 
+      Opt = {table, TabName} | {disk, SyncToDisk} | {order_by, OrderField}
       TabName = atom() %% the name of the ets (and optionally dets) table to which lockstep data is written
       SyncToDisk = boolean() %% if the options list contains {disk, true}, lockstep will
                              %% sync its ets table to disk and pick up the stream from where
                              %% the dets table left off rather that resyncing the whole data set.
+      OrderField = atom() %% specify the field to extract from json to use as the numeric sequence id
       Result = {ok, pid()} | {error, term()}
 
 ## Run

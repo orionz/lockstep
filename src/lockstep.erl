@@ -36,6 +36,7 @@
 -record(state, {socket,
                 tid=?MODULE,
                 disk=false,
+                order_by = <<"updated_at">>,
                 host,
                 port,
                 path,
@@ -148,6 +149,8 @@ init_state([{table, TabName}|Tail], State) when is_atom(TabName) ->
   init_state(Tail, State#state{tid=TabName});
 init_state([{disk, Disk}|Tail], State) when is_boolean(Disk) ->
   init_state(Tail, State#state{disk=Disk});
+init_state([{order_by, OrderBy}|Tail], State) when is_atom(OrderBy) ->
+  init_state(Tail, State#state{order_by=list_to_binary(atom_to_list(OrderBy))});
 init_state([{uri, Uri}|Tail], State) ->
   {http, [], Host, Port, Path, []} = http_uri:parse(Uri),
   init_state(Tail, State#state{host=Host, port=Port, path=Path});
@@ -176,20 +179,20 @@ process_chunk(Chunk, State) ->
   end,
   State.
 
-process_proplist(Props, #state{schema=Schema}=State) ->
-  { ok, Meta, Record } = analyze(Props, Schema),
+process_proplist(Props, #state{schema=Schema, order_by=OrderBy}=State) ->
+  { ok, Meta, Record } = analyze(OrderBy, Props, Schema),
   perform_update(Meta, Record, State).
 
-analyze(Props, Schema) ->
+analyze(OrderBy, Props, Schema) ->
   BlankRecord = erlang:make_tuple( length(Schema), undefined),
   BlankMeta = { set, 0 },
-  analyze(Props, Schema, BlankRecord, BlankMeta).
+  analyze(OrderBy, Props, Schema, BlankRecord, BlankMeta).
 
-analyze([ P | Props], Schema, Record, Meta) ->
-  NewMeta = build_meta(P, Meta),
+analyze(OrderBy, [ P | Props], Schema, Record, Meta) ->
+  NewMeta = build_meta(OrderBy, P, Meta),
   NewRecord = build_record(P, Schema, Record, 1),
-  analyze(Props, Schema, NewRecord, NewMeta);
-analyze([], _, Record, Meta) ->
+  analyze(OrderBy, Props, Schema, NewRecord, NewMeta);
+analyze(_OrderBy, [], _, Record, Meta) ->
   { ok, Meta, Record }.
 
 head(State) ->
@@ -198,11 +201,11 @@ head(State) ->
     _ -> 0
   end.
 
-build_meta({<<"deleted_at">>, DeletedAt}, { _, UpdatedAt }) when is_integer(DeletedAt) ->
-  { delete, UpdatedAt };
-build_meta({<<"updated_at">>, UpdatedAt}, { Action, _ }) ->
-  { Action, UpdatedAt};
-build_meta(_, Meta) ->
+build_meta(_OrderBy, {<<"deleted_at">>, DeletedAt}, { _, UpdatedAt }) when is_integer(DeletedAt) ->
+  {delete, UpdatedAt};
+build_meta(OrderBy, {OrderBy, UpdatedAt}, { Action, _ }) ->
+  {Action, UpdatedAt};
+build_meta(_, _, Meta) ->
   Meta.
 
 build_record({ Key, Value}, [ Key | _ ], Tuple, Index ) ->
