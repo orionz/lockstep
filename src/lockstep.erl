@@ -37,9 +37,7 @@
                 tid=?MODULE,
                 disk=false,
                 order_by = <<"updated_at">>,
-                host,
-                port,
-                path,
+                uri,
                 schema,
                 transfer,
                 contentlength,
@@ -152,8 +150,12 @@ init_state([{disk, Disk}|Tail], State) when is_boolean(Disk) ->
 init_state([{order_by, OrderBy}|Tail], State) when is_atom(OrderBy) ->
   init_state(Tail, State#state{order_by=list_to_binary(atom_to_list(OrderBy))});
 init_state([{uri, Uri}|Tail], State) ->
-  {http, [], Host, Port, Path, []} = http_uri:parse(Uri),
-  init_state(Tail, State#state{host=Host, port=Port, path=Path});
+  case http_uri:parse(Uri) of
+    {error, Err} ->
+      exit({error, Err});
+    ParsedUri ->
+      init_state(Tail, State#state{uri=ParsedUri})
+  end;
 init_state([{schema, Schema}|Tail], State) ->
   init_state(Tail, State#state{schema=digest_schema(Schema)});
 init_state([_|Tail], State) ->
@@ -258,14 +260,47 @@ digest_schema(Schema) ->
   Schema3 = lists:map(fun erlang:atom_to_list/1, Schema2),
   lists:map(fun erlang:list_to_binary/1, Schema3).
 
-connect(State) ->
+connect(#state{uri={Proto, Pass, Host, Port, Path, _}}=State) ->
   Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
-  io:format("Connecting to http://~s:~p~s~p...~n",[ State#state.host, State#state.port, State#state.path, head(State) ]),
-  case gen_tcp:connect( State#state.host, State#state.port, Opts, 10000) of
+  io:format("Connecting to ~s:~w~n",[Host, Port]),
+  case gen_tcp:connect( Host, Port, Opts, 10000) of
     {ok, Sock} ->
-      io:format("ok~n"),
-      ok = gen_tcp:send(Sock, [ <<"GET ">> , State#state.path, integer_to_list(head(State)), <<" HTTP/1.1\r\nHost: ">>, State#state.host ,<<"\r\n\r\n">> ]),
+      {ok, Mod, Sock1} = ssl_upgrade(Proto, Sock),
+      Req = req(Pass, Host, Path, integer_to_list(head(State))),
+      io:format("Sending ~p~n", [Req]),
+      ok = Mod:send(Sock1, Req),
       {ok, Sock};
     {error, Error} ->
       {error, Error}
   end.
+
+ssl_upgrade(https, Sock) ->
+  case ssl:connect(Sock, []) of
+    {ok, SslSock} -> {ok, ssl, SslSock};
+    Err -> Err
+  end;
+
+ssl_upgrade(http, Sock) ->
+    {ok, gen_tcp, Sock}.
+
+req(Pass, Host, Path, Head) ->
+  iolist_to_binary([
+    <<"GET ">>, Path, qs(Head), <<" HTTP/1.1\r\n">>,
+    authorization(Pass),
+    <<"Host: ">>, Host ,<<"\r\n\r\n">>
+  ]).
+
+qs(0) -> "";
+
+qs(Head) ->
+  [<<"?emitted_at=">>, Head].
+
+authorization([]) -> [];
+
+authorization(UserPass) ->
+  Auth =
+    case string:tokens(UserPass, ":") of
+      [User] -> base64:encode(User ++ ":");
+      [User, Pass] -> base64:encode(User ++ ":" ++ Pass)
+    end,
+  [<<"Authorization: Basic ">>, Auth, <<"\r\n">>].
