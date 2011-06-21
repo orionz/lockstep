@@ -65,7 +65,7 @@ init([Uri, Schema, Opts]) ->
   {ok, Fsm} = lockstep_fsm:start_link(),
   setup_tables(State),
   Self = self(),
-  spawn(fun() -> timer:sleep(?STAT_FREQ * 1000), gen_server:cast(Self, stats) end),
+  %spawn(fun() -> timer:sleep(?STAT_FREQ * 1000), gen_server:cast(Self, stats) end),
   {ok, State#state{fsm=Fsm}, 0}.
 
 handle_call(_Message, _From, State) ->
