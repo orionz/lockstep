@@ -75,8 +75,8 @@ header(http_eoh, _From, #state{transfer=chunked}=State) ->
 header(http_eoh, _From, State) ->
   {reply, eoh, body, State}.
 
-chunk_size(<<"0\r\n">>, _From, _State) ->
-  {reply, closed, request_line, #state{}};
+chunk_size(NL, _From, State) when NL == <<"\n">>; NL == <<"\r\n">>; NL == <<"0\r\n">> ->
+  {reply, ok, chunk_size, State};
 
 chunk_size(Line, _From, State) ->
   {ok, Size} = parse_chunk_size(Line),
@@ -84,15 +84,14 @@ chunk_size(Line, _From, State) ->
 
 chunk_line(Line, _From, #state{content_len=Size}=State) ->
   case Line of
-    <<Body:Size/binary, Rest/binary>> ->
-      Rest =/= <<"\r\n">> andalso io:format("recv'd extra chunk body size=~w body=~p~n", [Size, <<Body/binary, Rest/binary>>]),
+    <<Body:Size/binary, _/binary>> ->
       {reply, {ok, Body}, chunk_size, State#state{content_len=undefined}};
     Other ->
       io:format("recv'd poorly formatted chunk body size=~w body=~p~n", [Size, Other]),
       {reply, closed, request_line, #state{}}
   end.
 
-body(<<"\n">>, _From, State) ->
+body(NL, _From, State) when NL == <<"\n">>; NL == <<"\r\n">> ->
   {reply, ok, body, State};
 
 body(Packet, _From, State) ->
@@ -111,3 +110,4 @@ parse_chunk_size(<<$;, _/binary>>, Acc) ->
 
 parse_chunk_size(<<C, Rest/binary>>, Acc) ->
   parse_chunk_size(Rest, [C|Acc]).
+
