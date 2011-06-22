@@ -75,7 +75,8 @@ header(http_eoh, _From, #state{transfer=chunked}=State) ->
 header(http_eoh, _From, State) ->
   {reply, eoh, body, State}.
 
-chunk_size(NL, _From, State) when NL == <<"\n">>; NL == <<"\r\n">>; NL == <<"0\r\n">> ->
+chunk_size(NL, _From, State) when NL == <<"\n">>; NL == <<"\r\n">>;
+                                  NL == <<"0\r\n">>; NL == <<"2\r\n">> ->
   {reply, ok, chunk_size, State};
 
 chunk_size(Line, _From, State) ->
