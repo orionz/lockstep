@@ -27,12 +27,13 @@ All records sent must have a deleted_at attribute which should be null normally,
     start_link(Uri, Opts) -> Result
       Uri = list() %% http endpoint to pull data from
       Opts = [Opt]
-      Opt = {callback, Callback} | {table, TabName} | {disk, SyncToDisk} | {order_by, OrderField}
+      Opt = {callback, Callback} | {table, TabName} | {ets_opts, EtsOpts} | {disk, SyncToDisk} | {order_by, OrderField}
       Callback = {Module, Function, Args}
       Module = atom()
       Function = atom()
       Args = list()
       TabName = atom() %% the name of the ets (and optionally dets) table to which lockstep data is written
+      EtsOpts = list() %% arguments to pass to ets:new
       SyncToDisk = boolean() %% if the options list contains {disk, true}, lockstep will
                              %% sync its ets table to disk and pick up the stream from where
                              %% the dets table left off rather that resyncing the whole data set.

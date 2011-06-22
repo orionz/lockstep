@@ -38,6 +38,7 @@
                 fsm,
                 tid=?MODULE,
                 disk=false,
+                ets_opts=[],
                 order_by = <<"updated_at">>,
                 uri,
                 callback,
@@ -131,6 +132,8 @@ init_state([{table, TabName}|Tail], State) when is_atom(TabName) ->
   init_state(Tail, State#state{tid=TabName});
 init_state([{disk, Disk}|Tail], State) when is_boolean(Disk) ->
   init_state(Tail, State#state{disk=Disk});
+init_state([{ets_opts, Opts}|Tail], State) when is_list(Opts) ->
+  init_state(Tail, State#state{ets_opts=Opts});
 init_state([{order_by, OrderBy}|Tail], State) when is_atom(OrderBy) ->
   init_state(Tail, State#state{order_by=list_to_binary(atom_to_list(OrderBy))});
 init_state([{uri, Uri}|Tail], State) ->
@@ -198,8 +201,9 @@ delete_dets(Time, Record, Tid) ->
   dets:delete_object(Tid, Record),
   dets:insert(Tid, {lockstep_head, Time}).
 
-setup_tables(#state{tid=TabName, disk=Disk}) when is_atom(TabName) ->
-  TabName = ets:new(TabName, [named_table, set, protected, {read_concurrency, true}]),
+setup_tables(#state{tid=TabName, disk=Disk, ets_opts=Opts}) when is_atom(TabName) ->
+  Opts1 = [named_table, set, protected, {read_concurrency, true} | Opts],
+  TabName = ets:new(TabName, Opts1),
   Disk == true andalso setup_dets(TabName).
 
 setup_dets(TabName) ->
