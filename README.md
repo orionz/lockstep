@@ -23,12 +23,15 @@ All records sent must have a deleted_at attribute which should be null normally,
 
 ## API
 
-    start_link(Uri, Schema) -> Result
-    start_link(Uri, Schema, Opts) -> Result
+    start_link(Uri) -> Result
+    start_link(Uri, Opts) -> Result
       Uri = list() %% http endpoint to pull data from
-      Schema = tuple() %% schema of the records to be stored locally
       Opts = [Opt]
-      Opt = {table, TabName} | {disk, SyncToDisk} | {order_by, OrderField}
+      Opt = {callback, Callback} | {table, TabName} | {disk, SyncToDisk} | {order_by, OrderField}
+      Callback = {Module, Function, Args}
+      Module = atom()
+      Function = atom()
+      Args = list()
       TabName = atom() %% the name of the ets (and optionally dets) table to which lockstep data is written
       SyncToDisk = boolean() %% if the options list contains {disk, true}, lockstep will
                              %% sync its ets table to disk and pick up the stream from where
@@ -42,7 +45,7 @@ All records sent must have a deleted_at attribute which should be null normally,
     Listening on port 4567
 
     $ erl -pa ebin deps/*/ebin
-    1> {ok, Pid}  = lockstep:start_link("http://0.0.0.0:4567/servers/", {id, ip, port}, [{table, servers}, {disk, true}]).
+    1> {ok, Pid}  = lockstep:start_link("http://0.0.0.0:4567/servers/", [{table, servers}, {disk, true}]).
     {ok, <0.33.0>
     2> ets:tab2list(servers).
     [...]

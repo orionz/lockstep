@@ -31,7 +31,7 @@
          handle_info/2, terminate/2, code_change/3]).
 
 %% API
--export([start_link/2, start_link/3]).
+-export([start_link/1, start_link/2]).
 
 -record(state, {socket,
                 mod,
@@ -40,19 +40,17 @@
                 disk=false,
                 order_by = <<"updated_at">>,
                 uri,
-                schema,
+                callback,
                 writes=0}).
 
 -define(RECONNECT_TIME, 3000).
 -define(STAT_FREQ, 10).
 
-start_link(Uri, Schema) ->
-  start_link(Uri, Schema, []).
+start_link(Uri) ->
+  start_link(Uri, []).
 
-start_link(Uri, Schema, Opts) when is_list(Uri),
-                                   is_tuple(Schema),
-                                   is_list(Opts) ->
-  gen_server:start_link(?MODULE, [Uri, Schema, Opts], []).
+start_link(Uri, Opts) when is_list(Uri), is_list(Opts) ->
+  gen_server:start_link(?MODULE, [Uri, Opts], []).
 
 %% TODO: handle URL path that does not end in '/'
 %% TODO: handle redirects
@@ -60,11 +58,10 @@ start_link(Uri, Schema, Opts) when is_list(Uri),
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
-init([Uri, Schema, Opts]) ->
-  State = init_state([{uri, Uri}, {schema, Schema} | Opts]),
+init([Uri, Opts]) ->
+  State = init_state([{uri, Uri} | Opts]),
   {ok, Fsm} = lockstep_fsm:start_link(),
   setup_tables(State),
-  Self = self(),
   %spawn(fun() -> timer:sleep(?STAT_FREQ * 1000), gen_server:cast(Self, stats) end),
   {ok, State#state{fsm=Fsm}, 0}.
 
@@ -143,28 +140,31 @@ init_state([{uri, Uri}|Tail], State) ->
     ParsedUri ->
       init_state(Tail, State#state{uri=ParsedUri})
   end;
-init_state([{schema, Schema}|Tail], State) ->
-  init_state(Tail, State#state{schema=digest_schema(Schema)});
+init_state([{callback, Callback}|Tail], State) when is_tuple(Callback) ->
+  init_state(Tail, State#state{callback=Callback});
 init_state([_|Tail], State) ->
   init_state(Tail, State).
 
-process_msg(Msg, #state{schema=Schema, order_by=OrderBy}=State) ->
+process_msg(Msg, #state{callback=Callback, order_by=OrderBy}=State) ->
   {struct, Props} = mochijson2:decode(Msg),
-  {ok, Meta, Record} = analyze(OrderBy, Props, Schema),
-  perform_update(Meta, Record, State).
-
-analyze(OrderBy, Props, Schema) ->
-  BlankRecord = erlang:make_tuple(length(Schema), undefined),
-  BlankMeta = {set, 0},
-  analyze(OrderBy, Props, Schema, BlankRecord, BlankMeta).
-
-analyze(OrderBy, [ P | Props], Schema, Record, Meta) ->
-  NewMeta = build_meta(OrderBy, P, Meta),
-  NewRecord = build_record(P, Schema, Record, 1),
-  analyze(OrderBy, Props, Schema, NewRecord, NewMeta);
-
-analyze(_OrderBy, [], _, Record, Meta) ->
-  {ok, Meta, Record}.
+  Action =
+    lists:foldl(
+        fun({K, V}, Acc) ->
+          case K of
+            <<"deleted_at">> when is_integer(V) ->
+              {delete, V};
+            OrderBy when is_integer(V), Acc == undefined ->
+              {update, V};
+            _ ->
+              Acc
+          end
+        end, undefined, Props),
+  Record =
+    case Callback of
+      {M,F,A} -> apply(M, F, A ++ [Props]);
+      _ -> list_to_tuple([V || {_K, V} <- Props])
+    end,
+  perform_update(Action, Record, State).
 
 head(State) ->
   case ets:lookup(State#state.tid, lockstep_head) of
@@ -172,23 +172,10 @@ head(State) ->
     _ -> 0
   end.
 
-build_meta(_OrderBy, {<<"deleted_at">>, DeletedAt}, { _, UpdatedAt }) when is_integer(DeletedAt) ->
-  {delete, UpdatedAt};
-build_meta(OrderBy, {OrderBy, UpdatedAt}, { Action, _ }) ->
-  {Action, UpdatedAt};
-build_meta(_, _, Meta) ->
-  Meta.
-
-build_record({ Key, Value}, [ Key | _ ], Tuple, Index ) ->
-  erlang: setelement( Index, Tuple, Value );
-build_record({ Key, Value}, [ _ | Tail ], Tuple, Index ) ->
-  build_record({ Key, Value}, Tail, Tuple, Index + 1 );
-build_record(_, [], Tuple, _ ) ->
-  Tuple.
-
-perform_update( { set, Time }, Record, State ) ->
+perform_update({update, Time}, Record, State) ->
   set(Time, Record, State);
-perform_update( { delete, Time }, Record, State ) ->
+
+perform_update({delete, Time}, Record, State) ->
   delete(Time, Record, State).
 
 set(Time, Record, #state{tid=Tid, disk=Disk}) ->
@@ -223,11 +210,6 @@ disconnect(State) ->
   io:format("closing connection~n"),
   gen_tcp:close(State#state.socket),
   State#state{socket=undefined}.
-
-digest_schema(Schema) ->
-  Schema2 = tuple_to_list(Schema),
-  Schema3 = lists:map(fun erlang:atom_to_list/1, Schema2),
-  lists:map(fun erlang:list_to_binary/1, Schema3).
 
 connect(#state{uri={Proto, Pass, Host, Port, Path, _}}=State) ->
   Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
