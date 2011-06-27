@@ -248,7 +248,7 @@ req(Pass, Host, Path, Head) ->
 qs(0) -> "";
 
 qs(Head) ->
-  [<<"?emitted_at=">>, Head].
+  [<<"?update=true&since=">>, Head].
 
 authorization([]) -> [];
 
