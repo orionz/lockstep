@@ -218,7 +218,7 @@ disconnect(State) ->
 connect(#state{uri={Proto, Pass, Host, Port, Path, _}}=State) ->
   Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
   io:format("Connecting to ~s:~w~n",[Host, Port]),
-  case gen_tcp:connect( Host, Port, Opts, 10000) of
+  case gen_tcp:connect(Host, Port, Opts, 10000) of
     {ok, Sock} ->
       {ok, Mod, Sock1} = ssl_upgrade(Proto, Sock),
       Req = req(Pass, Host, Path, integer_to_list(head(State))),

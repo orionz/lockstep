@@ -58,7 +58,11 @@ terminate(_Reason, _StateName, _State) ->
   ok.
 
 request_line({http_response, {1,1}, Success, _}, _From, State) when Success >= 200, Success < 300 ->
-  {reply, ok, header, State}.
+  {reply, ok, header, State};
+
+request_line({http_response, _, _, _}=Resp, _From, State) ->
+  error_logger:error_report([?MODULE, request_line, Resp]),
+  {stop, {error, unexpected_response}, State}.
 
 header({http_header, _, 'Content-Length', _, Size}, _From, State) ->
   {reply, ok, header, State#state{content_len=list_to_integer(binary_to_list(Size))}};
