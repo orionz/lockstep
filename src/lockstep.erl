@@ -170,8 +170,8 @@ process_msg(Msg, #state{callback=Callback, order_by=OrderBy}=State) ->
   perform_update(Action, Record, State).
 
 head(State) ->
-  case ets:lookup(State#state.tid, lockstep_head) of
-    [{ lockstep_head, Time }] -> Time - 1; %% 1 second before
+  case ets:match_object(State#state.tid, {lockstep_head, '_'}) of
+    [{lockstep_head, Time}] -> Time - 1; %% 1 second before
     _ -> 0
   end.
 
