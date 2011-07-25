@@ -125,15 +125,8 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, sock_mod=Mod, buffer=Bu
             Mod:setopts(Sock, [{active, once}]),
             {noreply, State#state{cb_state=CbState, buffer=Rest}};
         {Err, CbState} ->
-            Err == {error, closed} andalso (catch Callback:handle_msg(disconnect, CbState)),
             catch Callback:terminate(Err, CbState),
-            Mod:close(Sock),
-            case [State#state.update, Err] of
-                [false, {error, closed}] ->
-                    {stop, normal, State};
-                _ ->
-                    {stop, Err, State}
-            end
+            {stop, Err, State}
     end;
 
 handle_info({Closed, _Sock}, #state{cb_mod=Callback}=State) when Closed == tcp_closed; Closed == ssl_closed ->
@@ -147,13 +140,13 @@ handle_info({Err, _Sock, Reason}, #state{cb_mod=Callback}=State) when Err == tcp
 handle_info(timeout, #state{uri=Uri, update=Update, seq_num=SeqNum, cb_mod=Callback, cb_state=CbState}=State) ->
     case connect(Uri) of
         {ok, Mod, Sock} ->
-			case send_req(Sock, Mod, Uri, Update, SeqNum, Callback, CbState) of
-				{ok, CbState1} ->
-					{noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1}};
-				{Err, CbState1} ->
-					catch Callback:terminate(Err, CbState1),
-					{stop, Err, State}
-			end;
+            case send_req(Sock, Mod, Uri, Update, SeqNum, Callback, CbState) of
+                    {ok, CbState1} ->
+                            {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1}};
+                    {Err, CbState1} ->
+                            catch Callback:terminate(Err, CbState1),
+                            {stop, Err, State}
+            end;
         Err ->
             catch Callback:terminate(Err, State#state.cb_state),
             {stop, Err, State}
@@ -236,7 +229,14 @@ parse_msgs(<<>>, _Callback, CbState) ->
 parse_msgs(Data, Callback, CbState) ->
     case read_size(Data) of
         {ok, 0, _Rest} ->
-            {{error, closed}, CbState};
+            case catch Callback:handle_msg(disconnect, CbState) of
+                {noreply, CbState1} ->
+                    {normal, CbState1};
+                {stop, Reason, CbState1} ->
+                    {Reason, CbState1};
+                {'EXIT', Err} ->
+                    {Err, CbState}
+            end;
         {ok, Size, Rest} ->
             case read_chunk(Rest, Size) of
                 {ok, <<"\r\n">>, Rest1} ->
