@@ -125,8 +125,15 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, sock_mod=Mod, buffer=Bu
             Mod:setopts(Sock, [{active, once}]),
             {noreply, State#state{cb_state=CbState, buffer=Rest}};
         {Err, CbState} ->
+            Err == {error, closed} andalso (catch Callback:handle_msg(disconnect, CbState)),
             catch Callback:terminate(Err, CbState),
-            {stop, Err, State}
+            Mod:close(Sock),
+            case [State#state.update, Err] of
+                [false, {error, closed}] ->
+                    {stop, normal, State};
+                _ ->
+                    {stop, Err, State}
+            end
     end;
 
 handle_info({Closed, _Sock}, #state{cb_mod=Callback}=State) when Closed == tcp_closed; Closed == ssl_closed ->
@@ -228,6 +235,8 @@ parse_msgs(<<>>, _Callback, CbState) ->
 
 parse_msgs(Data, Callback, CbState) ->
     case read_size(Data) of
+        {ok, 0, _Rest} ->
+            {{error, closed}, CbState};
         {ok, Size, Rest} ->
             case read_chunk(Rest, Size) of
                 {ok, <<"\r\n">>, Rest1} ->
