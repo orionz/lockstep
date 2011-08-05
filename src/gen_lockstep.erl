@@ -48,7 +48,17 @@ behaviour_info(callbacks) ->
 behaviour_info(_) ->
     undefined.
 
--record(state, {uri, cb_state, cb_mod, update, seq_num, sock, sock_mod, encoding, buffer}).
+-record(state, {uri,
+                cb_state,
+                cb_mod,
+                update,
+                deleted,
+                process_type,
+                seq_num,
+                sock,
+                sock_mod,
+                encoding,
+                buffer}).
 
 %%====================================================================
 %% API functions
@@ -67,16 +77,17 @@ init([Callback, LockstepUrl, InitParams]) ->
             {stop, {error, Err}, undefined};
         Uri ->
             case catch Callback:init(InitParams) of
-                {ok, Update, SeqNum, CbState} ->
-                    State = #state{
+                {ok, SeqNum, Opts, CbState} ->
+                    {ok, #state{
                         cb_state = CbState,
                         cb_mod = Callback,
-                        update = Update,
+                        update = proplists:get_value(update, Opts),
+                        deleted = proplists:get_value(deleted, Opts),
+                        process_type = proplists:get_value(process_type, Opts),
                         seq_num = SeqNum,
                         uri = Uri,
                         buffer = <<>>
-                    },
-                    {ok, State, 0};
+                    }, 0};
                 {stop, Err} ->
                     {stop, Err};
                 {'EXIT', Err} ->
@@ -137,10 +148,10 @@ handle_info({Err, _Sock, Reason}, #state{cb_mod=Callback}=State) when Err == tcp
     catch Callback:terminate({error, Reason}, State#state.cb_state),
     {stop, {error, Reason}, State};
 
-handle_info(timeout, #state{uri=Uri, update=Update, seq_num=SeqNum, cb_mod=Callback, cb_state=CbState}=State) ->
+handle_info(timeout, #state{uri=Uri, cb_mod=Callback, cb_state=CbState}=State) ->
     case connect(Uri) of
         {ok, Mod, Sock} ->
-            case send_req(Sock, Mod, Uri, Update, SeqNum, Callback, CbState) of
+            case send_req(Sock, Mod, Uri, Callback, CbState, State) of
                     {ok, CbState1} ->
                             {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1}};
                     {Err, CbState1} ->
@@ -187,15 +198,18 @@ ssl_upgrade(https, Sock) ->
 ssl_upgrade(http, Sock) ->
     {ok, gen_tcp, Sock}.
 
-req(Pass, Host, Path, Update, SeqNum) ->
+req(Pass, Host, Path, State) ->
     iolist_to_binary([
-        <<"GET ">>, Path, qs(Update, SeqNum), <<" HTTP/1.1\r\n">>,
+        <<"GET ">>, Path, qs(State), <<" HTTP/1.1\r\n">>,
         authorization(Pass),
         <<"Host: ">>, Host ,<<"\r\n\r\n">>
     ]).
 
-qs(Update, SeqNum) ->
-    [<<"?update=">>, atom_to_list(Update), <<"&since=">>, integer_to_list(SeqNum)].
+qs(State) ->
+    [<<"?since=">>, integer_to_list(State#state.seq_num)] ++
+    [[<<"&update=">>, atom_to_list(State#state.update)] || State#state.update =/= undefined] ++
+    [[<<"&deleted=">>, atom_to_list(State#state.deleted)] || State#state.deleted =/= undefined] ++
+    [[<<"&process_type=">>, State#state.process_type] || is_binary(State#state.process_type)].
 
 authorization([]) -> [];
 
@@ -207,20 +221,20 @@ authorization(UserPass) ->
         end,
     [<<"Authorization: Basic ">>, Auth, <<"\r\n">>].
 
-send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, Update, SeqNum, Callback, CbState) ->
-    Req = req(Pass, Host, Path, Update, SeqNum),
+send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, Callback, CbState, State) ->
+    Req = req(Pass, Host, Path, State),
     case catch Callback:handle_msg({connect, Req}, CbState) of
         {noreply, CbState1} ->
-                case Mod:send(Sock, Req) of
-                        ok ->
-                                {ok, CbState1};
-                        Err ->
-                                {Err, CbState1}
-                end;
+            case Mod:send(Sock, Req) of
+                ok ->
+                    {ok, CbState1};
+                Err ->
+                    {Err, CbState1}
+            end;
         {stop, Reason, CbState1} ->
-                {Reason, CbState1};
+            {Reason, CbState1};
         {'EXIT', Err} ->
-                {Err, CbState}
+            {Err, CbState}
     end.
 
 parse_msgs(<<>>, _Callback, CbState) ->
