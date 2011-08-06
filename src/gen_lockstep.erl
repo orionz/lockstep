@@ -51,9 +51,7 @@ behaviour_info(_) ->
 -record(state, {uri,
                 cb_state,
                 cb_mod,
-                update,
-                deleted,
-                process_type,
+                api_opts,
                 seq_num,
                 sock,
                 sock_mod,
@@ -81,9 +79,7 @@ init([Callback, LockstepUrl, InitParams]) ->
                     {ok, #state{
                         cb_state = CbState,
                         cb_mod = Callback,
-                        update = proplists:get_value(update, Opts),
-                        deleted = proplists:get_value(deleted, Opts),
-                        process_type = proplists:get_value(process_type, Opts),
+                        api_opts = Opts,
                         seq_num = SeqNum,
                         uri = Uri,
                         buffer = <<>>
@@ -207,9 +203,7 @@ req(Pass, Host, Path, State) ->
 
 qs(State) ->
     [<<"?since=">>, integer_to_list(State#state.seq_num)] ++
-    [[<<"&update=">>, atom_to_list(State#state.update)] || State#state.update =/= undefined] ++
-    [[<<"&deleted=">>, atom_to_list(State#state.deleted)] || State#state.deleted =/= undefined] ++
-    [[<<"&process_type=">>, State#state.process_type] || is_binary(State#state.process_type)].
+    [[<<"&">>, to_binary(Key), <<"=">>, to_binary(Val)] || {Key, Val} <- State#state.api_opts, Val =/= undefined].
 
 authorization([]) -> [];
 
@@ -319,4 +313,15 @@ read_chunk(Data, Size) ->
         _ ->
             eof
     end.
-    
+
+to_binary(Bin) when is_binary(Bin) ->
+    Bin;
+
+to_binary(List) when is_list(List) ->
+    list_to_binary(List);
+
+to_binary(Int) when is_integer(Int) ->
+    to_binary(integer_to_list(Int));
+
+to_binary(Atom) when is_atom(Atom) ->
+    to_binary(atom_to_list(Atom)).
