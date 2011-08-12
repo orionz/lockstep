@@ -235,7 +235,8 @@ send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}=Uri, State, Callback, C
                 ok ->
                     {ok, CbState1};
                 Err ->
-                    notify_callback_and_retry(Err, Callback, CbState1, fun send_req/6, [Sock, Mod, Uri, State])
+                    gen_tcp:close(Sock),
+                    notify_callback_and_retry(Err, Callback, CbState1, fun connect/3, [Uri])
             end;
         {stop, Reason, CbState1} ->
             {Reason, CbState1};
