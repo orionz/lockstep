@@ -145,17 +145,17 @@ handle_info({Err, _Sock, Reason}, #state{cb_mod=Callback}=State) when Err == tcp
     {stop, {error, Reason}, State};
 
 handle_info(timeout, #state{uri=Uri, cb_mod=Callback, cb_state=CbState}=State) ->
-    case connect(Uri) of
-        {ok, Mod, Sock} ->
-            case send_req(Sock, Mod, Uri, Callback, CbState, State) of
-                    {ok, CbState1} ->
-                            {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1}};
-                    {Err, CbState1} ->
-                            catch Callback:terminate(Err, CbState1),
-                            {stop, Err, State}
+    case connect(Uri, Callback, CbState) of
+        {ok, Mod, Sock, CbState1} ->
+            case send_req(Sock, Mod, Uri, State, Callback, CbState1) of
+                {ok, CbState2} ->
+                    {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState2}};
+                {Err, CbState2} ->
+                    catch Callback:terminate(Err, CbState2),
+                    {stop, Err, State}
             end;
-        Err ->
-            catch Callback:terminate(Err, State#state.cb_state),
+        {Err, CbState1} ->
+            catch Callback:terminate(Err, CbState1),
             {stop, Err, State}
     end;
 
@@ -169,18 +169,30 @@ code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
 
 %% Internal functions
-connect({Proto, _Pass, Host, Port, _Path, _}) ->
+connect({Proto, _Pass, Host, Port, _Path, _}=Uri, Callback, CbState) ->
     Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
     case gen_tcp:connect(Host, Port, Opts, 5000) of
         {ok, Sock} ->
             case ssl_upgrade(Proto, Sock) of
                 {ok, Mod, Sock1} ->
-                    {ok, Mod, Sock1};
+                    {ok, Mod, Sock1, CbState};
                 Err ->
-                    Err
+                    gen_tcp:close(Sock),
+                    notify_callback_and_retry(Err, Callback, CbState, fun connect/3, [Uri])
             end;
         Err ->
-            Err 
+            notify_callback_and_retry(Err, Callback, CbState, fun connect/3, [Uri])
+    end.
+
+notify_callback_and_retry(Err, Callback, CbState, Fun, Args) ->
+    case catch Callback:handle_msg(Err, CbState) of
+        {noreply, CbState1} ->
+            timer:sleep(1000),
+            apply(Fun, Args ++ [Callback, CbState1]);
+        {stop, Reason, CbState1} ->
+            {Reason, CbState1};
+        {'EXIT', Err} ->
+            {Err, CbState}
     end.
 
 ssl_upgrade(https, Sock) ->
@@ -215,7 +227,7 @@ authorization(UserPass) ->
         end,
     [<<"Authorization: Basic ">>, Auth, <<"\r\n">>].
 
-send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, Callback, CbState, State) ->
+send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}=Uri, State, Callback, CbState) ->
     Req = req(Pass, Host, Path, State),
     case catch Callback:handle_msg({connect, Req}, CbState) of
         {noreply, CbState1} ->
@@ -223,7 +235,7 @@ send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, Callback, CbState, Sta
                 ok ->
                     {ok, CbState1};
                 Err ->
-                    {Err, CbState1}
+                    notify_callback_and_retry(Err, Callback, CbState1, fun send_req/6, [Sock, Mod, Uri, State])
             end;
         {stop, Reason, CbState1} ->
             {Reason, CbState1};
