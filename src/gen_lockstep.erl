@@ -66,6 +66,8 @@ behaviour_info(_) ->
                 buffer,
                 suspended=false}).
 
+-define(IDLE_TIMEOUT, 60000).
+
 %%====================================================================
 %% API functions
 %%====================================================================
@@ -188,7 +190,7 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, sock_mod=Mod, buffer=Bu
     case parse_msgs(<<Buffer/binary, Data/binary>>, Callback, State#state.cb_state) of
         {ok, CbState, Rest} -> 
             Mod:setopts(Sock, [{active, once}]),
-            {noreply, State#state{cb_state=CbState, buffer=Rest}};
+            {noreply, State#state{cb_state=CbState, buffer=Rest}, ?IDLE_TIMEOUT};
         {Err, CbState} ->
             catch Callback:terminate(Err, CbState),
             {stop, Err, State}
@@ -212,7 +214,8 @@ when is_tuple(ClosedTuple) andalso
             {stop, Err, State}
     end;
 
-handle_info(timeout, #state{uri=Uri, cb_mod=Callback, cb_state=CbState}=State) ->
+handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=Uri, cb_mod=Callback, cb_state=CbState}=State) ->
+    catch OldSockMod:close(OldSock),
     case connect(Uri) of
         {ok, Mod, Sock} ->
             case send_req(Sock, Mod, Uri, State, Callback, CbState) of
