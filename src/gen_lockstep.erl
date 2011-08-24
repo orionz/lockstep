@@ -28,6 +28,8 @@
 %% API
 -export([start_link/3,
          start_link/4,
+         call/3,
+         cast/2,
          suspend/1,
          resume/2]).
 
@@ -45,6 +47,8 @@
 %% @hidden
 behaviour_info(callbacks) ->
     [{init, 1},
+     {handle_call, 3},
+     {handle_cast, 2},
      {handle_msg, 2},
      {terminate, 2}];
 
@@ -72,6 +76,12 @@ start_link(CallbackModule, LockstepUrl, InitParams) ->
 -spec start_link(atom(), atom(), list(), [any()]) -> ok | ignore | {error, any()}.
 start_link(RegisterName, CallbackModule, LockstepUrl, InitParams) ->
     gen_server:start_link({local, RegisterName}, ?MODULE, [CallbackModule, LockstepUrl, InitParams], [{fullsweep_after, 0}]).
+
+call(Pid, Msg, Timeout) when is_integer(Timeout) ->
+    gen_server:call(Pid, {call, Msg}, Timeout).
+
+cast(Pid, Msg) ->
+    gen_server:cast(Pid, Msg).
 
 suspend(Pid) ->
     gen_server:call(Pid, suspend, 5000).
@@ -105,6 +115,21 @@ init([Callback, LockstepUrl, InitParams]) ->
             end
     end.
 
+handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) ->
+    case catch Callback:handle_call(Msg, From, CbState) of
+        {reply, Reply, CbState1} ->
+            {reply, Reply, State#state{cb_state=CbState1}};
+        {stop, Reason, CbState1} ->
+            catch Callback:terminate(Reason, CbState1),
+            {stop, Reason, State#state{cb_state=CbState1}};
+        {stop, Reason, Reply, CbState1} ->
+            catch Callback:terminate(Reason, CbState1),
+            {stop, Reason, Reply, State#state{cb_state=CbState1}};
+        {'EXIT', Err} ->
+            catch Callback:terminate(Err, CbState),
+            {stop, Err, State}
+    end;
+
 handle_call(suspend, _From, #state{sock=Sock, sock_mod=Mod}=State) ->
     Mod:close(Sock),
     {reply, ok, State#state{suspended=true}};
@@ -114,6 +139,18 @@ handle_call({resume, SeqNum}, _From, State) ->
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
+
+handle_cast({cast, Msg}, #state{cb_mod=Callback, cb_state=CbState}=State) ->
+    case catch Callback:handle_cast(Msg, CbState) of
+        {noreply, CbState1} ->
+            {noreply, State#state{cb_state=CbState1}};
+        {stop, Reason, CbState1} ->
+            catch Callback:terminate(Reason, CbState1),
+            {stop, Reason, State#state{cb_state=CbState1}};
+        {'EXIT', Err} ->
+            catch Callback:terminate(Err, CbState),
+            {stop, Err, State}
+    end;
 
 handle_cast(_Message, State) ->
     {noreply, State}.
