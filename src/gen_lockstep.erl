@@ -26,7 +26,9 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3]).
+-export([start_link/3,
+         suspend/1,
+         resume/2]).
 
 %% Behavior callbacks
 -export([behaviour_info/1]).
@@ -56,7 +58,8 @@ behaviour_info(_) ->
                 sock,
                 sock_mod,
                 encoding,
-                buffer}).
+                buffer,
+                suspended=false}).
 
 %%====================================================================
 %% API functions
@@ -64,6 +67,12 @@ behaviour_info(_) ->
 -spec start_link(atom(), list(), [any()]) -> ok | ignore | {error, any()}.
 start_link(CallbackModule, LockstepUrl, InitParams) ->
     gen_server:start_link(?MODULE, [CallbackModule, LockstepUrl, InitParams], [{fullsweep_after, 0}]).
+
+suspend(Pid) ->
+    gen_server:call(Pid, suspend, 5000).
+
+resume(Pid, SeqNum) when is_integer(SeqNum) ->
+    gen_server:call(Pid, {resume, SeqNum}, 5000).
 
 %%====================================================================
 %% gen_server callbacks
@@ -90,6 +99,13 @@ init([Callback, LockstepUrl, InitParams]) ->
                     {stop, Err}
             end
     end.
+
+handle_call(suspend, _From, #state{sock=Sock, sock_mod=Mod}=State) ->
+    Mod:close(Sock),
+    {reply, ok, State#state{suspended=true}};
+
+handle_call({resume, SeqNum}, _From, State) ->
+    {reply, ok, State#state{suspended=false, seq_num=SeqNum}, 0};
 
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
@@ -136,7 +152,12 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, sock_mod=Mod, buffer=Bu
             {stop, Err, State}
     end;
 
-handle_info({Closed, _Sock}, #state{cb_mod=Callback, cb_state=CbState}=State) when Closed == tcp_closed; Closed == ssl_closed ->
+handle_info(ClosedTuple, #state{cb_mod=Callback, cb_state=CbState, suspended=false}=State)
+when is_tuple(ClosedTuple) andalso
+    (element(1, ClosedTuple) == tcp_closed orelse
+     element(1, ClosedTuple) == ssl_closed orelse
+     element(1, ClosedTuple) == tcp_error orelse
+     element(1, ClosedTuple) == ssl_error) ->
     case catch Callback:handle_msg({error, closed}, CbState) of
         {noreply, CbState1} ->
             timer:sleep(1000),
@@ -148,10 +169,6 @@ handle_info({Closed, _Sock}, #state{cb_mod=Callback, cb_state=CbState}=State) wh
             catch Callback:terminate(Err, CbState),
             {stop, Err, State}
     end;
-
-handle_info({Err, _Sock, Reason}, #state{cb_mod=Callback}=State) when Err == tcp_error; Err == ssl_error ->
-    catch Callback:terminate({error, Reason}, State#state.cb_state),
-    {stop, {error, Reason}, State};
 
 handle_info(timeout, #state{uri=Uri, cb_mod=Callback, cb_state=CbState}=State) ->
     case connect(Uri) of
