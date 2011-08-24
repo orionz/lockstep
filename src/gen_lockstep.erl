@@ -27,6 +27,7 @@
 
 %% API
 -export([start_link/3,
+         start_link/4,
          suspend/1,
          resume/2]).
 
@@ -67,6 +68,10 @@ behaviour_info(_) ->
 -spec start_link(atom(), list(), [any()]) -> ok | ignore | {error, any()}.
 start_link(CallbackModule, LockstepUrl, InitParams) ->
     gen_server:start_link(?MODULE, [CallbackModule, LockstepUrl, InitParams], [{fullsweep_after, 0}]).
+
+-spec start_link(atom(), atom(), list(), [any()]) -> ok | ignore | {error, any()}.
+start_link(RegisterName, CallbackModule, LockstepUrl, InitParams) ->
+    gen_server:start_link({local, RegisterName}, ?MODULE, [CallbackModule, LockstepUrl, InitParams], [{fullsweep_after, 0}]).
 
 suspend(Pid) ->
     gen_server:call(Pid, suspend, 5000).
