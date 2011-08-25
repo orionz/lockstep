@@ -50,6 +50,7 @@ behaviour_info(callbacks) ->
      {handle_call, 3},
      {handle_cast, 2},
      {handle_msg, 2},
+     {handle_event, 2},
      {terminate, 2}];
 
 behaviour_info(_) ->
@@ -202,7 +203,7 @@ when is_tuple(ClosedTuple) andalso
      element(1, ClosedTuple) == ssl_closed orelse
      element(1, ClosedTuple) == tcp_error orelse
      element(1, ClosedTuple) == ssl_error) ->
-    case catch Callback:handle_msg({error, closed}, CbState) of
+    case catch Callback:handle_event({error, closed}, CbState) of
         {noreply, CbState1} ->
             timer:sleep(1000),
             {noreply, State#state{cb_state=CbState1}, 0};
@@ -269,7 +270,7 @@ connect({Proto, _Pass, Host, Port, _Path, _}) ->
     end.
 
 notify_callback(Err, Callback, CbState) ->
-    case catch Callback:handle_msg(Err, CbState) of
+    case catch Callback:handle_event(Err, CbState) of
         {noreply, CbState1} ->
             {ok, CbState1};
         {stop, Reason, CbState1} ->
@@ -312,7 +313,7 @@ authorization(UserPass) ->
 
 send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, State, Callback, CbState) ->
     Req = req(Pass, Host, Path, State),
-    case catch Callback:handle_msg({connect, Req}, CbState) of
+    case catch Callback:handle_event(connect, CbState) of
         {noreply, CbState1} ->
             case Mod:send(Sock, Req) of
                 ok ->
@@ -333,7 +334,7 @@ parse_msgs(<<>>, _Callback, CbState) ->
 parse_msgs(Data, Callback, CbState) ->
     case read_size(Data) of
         {ok, 0, _Rest} ->
-            case catch Callback:handle_msg(disconnect, CbState) of
+            case catch Callback:handle_event(disconnect, CbState) of
                 {noreply, CbState1} ->
                     {normal, CbState1};
                 {stop, Reason, CbState1} ->
@@ -348,7 +349,7 @@ parse_msgs(Data, Callback, CbState) ->
                 {ok, Chunk, Rest1} ->
                     case (catch mochijson2:decode(Chunk)) of
                         {struct, Props} ->
-                            case catch Callback:handle_msg({msg, Props}, CbState) of
+                            case catch Callback:handle_msg(Props, CbState) of
                                 {noreply, CbState1} ->
                                     parse_msgs(Rest1, Callback, CbState1);
                                 {stop, Reason, CbState1} ->
