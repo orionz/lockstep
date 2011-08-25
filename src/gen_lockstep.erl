@@ -48,7 +48,6 @@
 behaviour_info(callbacks) ->
     [{init, 1},
      {handle_call, 3},
-     {handle_cast, 2},
      {handle_msg, 2},
      {handle_event, 2},
      {terminate, 2}];
@@ -133,27 +132,33 @@ handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) 
             {stop, Err, State}
     end;
 
-handle_call(suspend, _From, #state{sock=Sock, sock_mod=Mod}=State) ->
+handle_call(suspend, _From, #state{sock=Sock, sock_mod=Mod, cb_mod=Callback, cb_state=CbState}=State) ->
     Mod:close(Sock),
-    {reply, ok, State#state{suspended=true}};
-
-handle_call({resume, SeqNum}, _From, State) ->
-    {reply, ok, State#state{suspended=false, seq_num=SeqNum}, 0};
-
-handle_call(_Message, _From, State) ->
-    {reply, error, State}.
-
-handle_cast({cast, Msg}, #state{cb_mod=Callback, cb_state=CbState}=State) ->
-    case catch Callback:handle_cast(Msg, CbState) of
+    case catch Callback:handle_event(suspend, CbState) of
         {noreply, CbState1} ->
-            {noreply, State#state{cb_state=CbState1}};
+            {reply, ok, State#state{cb_state=CbState1, suspended=true}};
         {stop, Reason, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, State#state{cb_state=CbState1}};
+            {stop, Reason, State};
         {'EXIT', Err} ->
             catch Callback:terminate(Err, CbState),
             {stop, Err, State}
     end;
+
+handle_call({resume, SeqNum}, _From, #state{cb_mod=Callback, cb_state=CbState}=State) ->
+    case catch Callback:handle_event({resume, SeqNum}, CbState) of
+        {noreply, CbState1} ->
+            {reply, ok, State#state{cb_state=CbState1, suspended=false, seq_num=SeqNum}, 0};
+        {stop, Reason, CbState1} ->
+            catch Callback:terminate(Reason, CbState1),
+            {stop, Reason, State};
+        {'EXIT', Err} ->
+            catch Callback:terminate(Err, CbState),
+            {stop, Err, State}
+    end;
+
+handle_call(_Message, _From, State) ->
+    {reply, error, State}.
 
 handle_cast(_Message, State) ->
     {noreply, State}.
