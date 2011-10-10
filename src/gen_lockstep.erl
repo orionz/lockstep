@@ -412,6 +412,8 @@ read_chunk(Data, Size) ->
     case Data of
         <<Chunk:Size/binary, "\r\n", Rest/binary>> ->
             {ok, Chunk, Rest};
+        <<_Chunk:Size/binary, _Rest/binary>> when size(_Rest) >= 2 ->
+            {error, malformed_chunk};
         _ ->
             eof
     end.
