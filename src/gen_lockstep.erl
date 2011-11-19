@@ -29,9 +29,7 @@
 -export([start_link/3,
          start_link/4,
          call/3,
-         cast/2,
-         suspend/1,
-         resume/2]).
+         cast/2]).
 
 %% Behavior callbacks
 -export([behaviour_info/1]).
@@ -63,8 +61,7 @@ behaviour_info(_) ->
                 sock,
                 sock_mod,
                 encoding,
-                buffer,
-                suspended=false}).
+                buffer}).
 
 -define(IDLE_TIMEOUT, 60000).
 
@@ -84,12 +81,6 @@ call(Pid, Msg, Timeout) when is_integer(Timeout) ->
 
 cast(Pid, Msg) ->
     gen_server:cast(Pid, Msg).
-
-suspend(Pid) ->
-    gen_server:call(Pid, suspend, 5000).
-
-resume(Pid, SeqNum) when is_integer(SeqNum) ->
-    gen_server:call(Pid, {resume, SeqNum}, 5000).
 
 %%====================================================================
 %% gen_server callbacks
@@ -127,31 +118,6 @@ handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) 
         {stop, Reason, Reply, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
             {stop, Reason, Reply, State#state{cb_state=CbState1}};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, State}
-    end;
-
-handle_call(suspend, _From, #state{sock=Sock, sock_mod=Mod, cb_mod=Callback, cb_state=CbState}=State) ->
-    Mod:close(Sock),
-    case catch Callback:handle_event(suspend, CbState) of
-        {noreply, CbState1} ->
-            {reply, ok, State#state{cb_state=CbState1, suspended=true}};
-        {stop, Reason, CbState1} ->
-            catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, State};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, State}
-    end;
-
-handle_call({resume, SeqNum}, _From, #state{cb_mod=Callback, cb_state=CbState}=State) ->
-    case catch Callback:handle_event({resume, SeqNum}, CbState) of
-        {noreply, CbState1} ->
-            {reply, ok, State#state{cb_state=CbState1, suspended=false, seq_num=SeqNum}, 0};
-        {stop, Reason, CbState1} ->
-            catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, State};
         {'EXIT', Err} ->
             catch Callback:terminate(Err, CbState),
             {stop, Err, State}
@@ -202,7 +168,7 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, sock_mod=Mod, buffer=Bu
             {stop, Err, State}
     end;
 
-handle_info(ClosedTuple, #state{cb_mod=Callback, cb_state=CbState, suspended=false}=State)
+handle_info(ClosedTuple, #state{cb_mod=Callback, cb_state=CbState}=State)
 when is_tuple(ClosedTuple) andalso
     (element(1, ClosedTuple) == tcp_closed orelse
      element(1, ClosedTuple) == ssl_closed orelse
