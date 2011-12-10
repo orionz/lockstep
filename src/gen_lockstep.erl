@@ -57,7 +57,6 @@ behaviour_info(_) ->
                 cb_state,
                 cb_mod,
                 api_opts,
-                seq_num,
                 sock,
                 sock_mod,
                 encoding,
@@ -95,12 +94,11 @@ init([Callback, LockstepUrl, InitParams]) ->
             {stop, {error, Err}, undefined};
         Uri ->
             case catch Callback:init(InitParams) of
-                {ok, SeqNum, Opts, CbState} ->
+                {ok, Opts, CbState} ->
                     {ok, #state{
                         cb_state = CbState,
                         cb_mod = Callback,
                         api_opts = Opts,
-                        seq_num = SeqNum,
                         uri = Uri,
                         buffer = <<>>
                     }, 0};
@@ -263,15 +261,15 @@ ssl_upgrade(https, Sock) ->
 ssl_upgrade(http, Sock) ->
     {ok, gen_tcp, Sock}.
 
-req(Pass, Host, Path, State) ->
+req(Pass, Host, Path, SeqNo, State) ->
     iolist_to_binary([
-        <<"GET ">>, Path, qs(State), <<" HTTP/1.1\r\n">>,
+        <<"GET ">>, Path, qs(SeqNo, State), <<" HTTP/1.1\r\n">>,
         authorization(Pass),
         <<"Host: ">>, Host ,<<"\r\n\r\n">>
     ]).
 
-qs(State) ->
-    [<<"?since=">>, integer_to_list(State#state.seq_num)] ++
+qs(SeqNo, State) when is_integer(SeqNo)->
+    [<<"?since=">>, integer_to_list(SeqNo)] ++
     [[<<"&">>, to_binary(Key), <<"=">>, to_binary(Val)] || {Key, Val} <- State#state.api_opts, Val =/= undefined].
 
 authorization([]) -> [];
@@ -285,15 +283,16 @@ authorization(UserPass) ->
     [<<"Authorization: Basic ">>, Auth, <<"\r\n">>].
 
 send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, State, Callback, CbState) ->
-    Req = req(Pass, Host, Path, State),
     case catch Callback:handle_event(connect, CbState) of
         {noreply, CbState1} ->
+            {NewSeqNo, CbState2} = Callback:current_seq_no(CbState1),
+            Req = req(Pass, Host, Path, NewSeqNo, State),
             case Mod:send(Sock, Req) of
                 ok ->
-                    {ok, CbState1};
+                    {ok, CbState2};
                 Err ->
                     Mod:close(Sock),
-                    {error, Err, CbState1}
+                    {error, Err, CbState2}
             end;
         {stop, Reason, CbState1} ->
             {Reason, CbState1};
