@@ -48,6 +48,7 @@ behaviour_info(callbacks) ->
      {handle_call, 3},
      {handle_msg, 2},
      {handle_event, 2},
+     {current_seq_no, 1},
      {terminate, 2}];
 
 behaviour_info(_) ->
