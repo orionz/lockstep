@@ -70,11 +70,14 @@ behaviour_info(_) ->
 %%====================================================================
 -spec start_link(atom(), list(), [any()]) -> ok | ignore | {error, any()}.
 start_link(CallbackModule, LockstepUrl, InitParams) ->
-    gen_server:start_link(?MODULE, [CallbackModule, LockstepUrl, InitParams], [{fullsweep_after, 0}]).
+    gen_server:start_link(?MODULE, [CallbackModule, LockstepUrl, InitParams],
+                          [{spawn_opt, [{fullsweep_after, 0}]}]).
 
 -spec start_link(atom(), atom(), list(), [any()]) -> ok | ignore | {error, any()}.
 start_link(RegisterName, CallbackModule, LockstepUrl, InitParams) ->
-    gen_server:start_link({local, RegisterName}, ?MODULE, [CallbackModule, LockstepUrl, InitParams], [{fullsweep_after, 0}]).
+    gen_server:start_link({local, RegisterName}, ?MODULE,
+                          [CallbackModule, LockstepUrl, InitParams],
+                          [{spawn_opt, [{fullsweep_after, 0}]}]).
 
 call(Pid, Msg, Timeout) when is_integer(Timeout) ->
     gen_server:call(Pid, {call, Msg}, Timeout).
