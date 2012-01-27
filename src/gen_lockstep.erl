@@ -176,7 +176,7 @@ when is_tuple(ClosedTuple) andalso
      element(1, ClosedTuple) == ssl_error) ->
     case catch Callback:handle_event({error, closed}, CbState) of
         {noreply, CbState1} ->
-            {noreply, State#state{cb_state=CbState1}, 0};
+            {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
         {stop, Reason, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
             {stop, Reason, State};
