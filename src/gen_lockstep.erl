@@ -159,13 +159,25 @@ handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod
             {stop, {error, expected_chunked_encoding}, State}
     end;
 
-handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, sock_mod=Mod, buffer=Buffer}=State) when Proto == tcp; Proto == ssl ->
-    case parse_msgs(<<Buffer/binary, Data/binary>>, Callback, State#state.cb_state) of
-        {ok, CbState, Rest} -> 
+handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, cb_state=CbState0, sock_mod=Mod, buffer=Buffer}=State) when Proto == tcp; Proto == ssl ->
+    case parse_msgs(<<Buffer/binary, Data/binary>>, Callback, CbState0) of
+        {ok, CbState1, Rest} ->
             Mod:setopts(Sock, [{active, once}]),
-            {noreply, State#state{cb_state=CbState, buffer=Rest}, ?IDLE_TIMEOUT};
-        {Err, CbState} ->
-            catch Callback:terminate(Err, CbState),
+            {noreply, State#state{cb_state=CbState1, buffer=Rest}, ?IDLE_TIMEOUT};
+        {ok, end_of_stream} ->
+            Mod:close(Sock),
+            case catch Callback:handle_event(disconnect, CbState0) of
+                {noreply, CbState1} ->
+                    {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
+                {stop, Reason, CbState1} ->
+                    catch Callback:terminate(Reason, CbState1),
+                    {stop, Reason, State};
+                {'EXIT', Err} ->
+                    catch Callback:terminate(Err, CbState0),
+                    {stop, Err, State}
+            end;
+        {Err, CbState1} ->
+            catch Callback:terminate(Err, CbState1),
             {stop, Err, State}
     end;
 
@@ -307,7 +319,7 @@ parse_msgs(<<>>, _Callback, CbState) ->
 parse_msgs(Data, Callback, CbState) ->
     case read_size(Data) of
         {ok, 0, _Rest} ->
-            {ok, CbState, <<>>};
+            {ok, end_of_stream};
         {ok, Size, Rest} ->
             case read_chunk(Rest, Size) of
                 {ok, <<"\r\n">>, Rest1} ->
