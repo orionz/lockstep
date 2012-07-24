@@ -61,6 +61,8 @@ behaviour_info(_) ->
                 sock,
                 sock_mod,
                 encoding,
+                content_length,
+                parser_mod,
                 buffer}).
 
 -define(IDLE_TIMEOUT, 60000).
@@ -145,58 +147,69 @@ handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=S
     case [Key, Val] of
         ['Transfer-Encoding', <<"chunked">>] ->
             {noreply, State#state{encoding=chunked}};
+        ['Content-Length', ContentLength] ->
+            {noreply, State#state{content_length=list_to_integer(binary_to_list(ContentLength))}};
         _ ->
             {noreply, State}
     end;
 
-handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod, encoding=Enc}=State) when Proto == tcp; Proto == ssl ->
-    case Enc of
-        chunked ->
+handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod, encoding=Enc, content_length=Len}=State) when Proto == tcp; Proto == ssl ->
+    case [Enc, Len] of
+        [chunked, _] ->
             Mod:setopts(Sock, [{active, once}, {packet, raw}]),
-            {noreply, State};
+            {noreply, State#state{parser_mod=chunked_parser}};
+        [_, Len] when is_integer(Len) ->
+            Mod:setopts(Sock, [{active, once}, {packet, raw}]),
+            {noreply, State#state{parser_mod=content_len_parser}};
         _ ->
-            catch Callback:terminate({error, expected_chunked_encoding}, State#state.cb_state),
-            {stop, {error, expected_chunked_encoding}, State}
+            catch Callback:terminate({error, unrecognized_encoding}, State#state.cb_state),
+            {stop, {error, unrecognized_encoding}, State}
     end;
 
-handle_info({Proto, Sock, Data}, #state{cb_mod=Callback, cb_state=CbState0, sock_mod=Mod, buffer=Buffer}=State) when Proto == tcp; Proto == ssl ->
-    case parse_msgs(<<Buffer/binary, Data/binary>>, Callback, CbState0) of
+handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
+                                        cb_state=CbState0,
+                                        sock_mod=Mod,
+                                        parser_mod=chunked_parser,
+                                        buffer=Buffer}=State)
+                                        when Proto == tcp; Proto == ssl ->
+    case chunked_parser:parse_msgs(<<Buffer/binary, Data/binary>>, Callback, CbState0) of
         {ok, CbState1, Rest} ->
             Mod:setopts(Sock, [{active, once}]),
             {noreply, State#state{cb_state=CbState1, buffer=Rest}, ?IDLE_TIMEOUT};
         {ok, end_of_stream} ->
             Mod:close(Sock),
-            case catch Callback:handle_event(disconnect, CbState0) of
-                {noreply, CbState1} ->
-                    {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
-                {stop, Reason, CbState1} ->
-                    catch Callback:terminate(Reason, CbState1),
-                    {stop, Reason, State};
-                {'EXIT', Err} ->
-                    catch Callback:terminate(Err, CbState0),
-                    {stop, Err, State}
-            end;
+            disconnect(State);
         {Err, CbState1} ->
             catch Callback:terminate(Err, CbState1),
             {stop, Err, State}
     end;
 
-handle_info(ClosedTuple, #state{cb_mod=Callback, cb_state=CbState}=State)
+handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
+                                        cb_state=CbState0,
+                                        sock_mod=Mod,
+                                        parser_mod=content_len_parser,
+                                        content_length=ContentLen,
+                                        buffer=Buffer}=State)
+                                        when Proto == tcp; Proto == ssl ->
+    case content_len_parser:parse_msgs(<<Buffer/binary, Data/binary>>, ContentLen, Callback, CbState0) of
+        {ok, CbState1, ContentLen1, Rest} ->
+            Mod:setopts(Sock, [{active, once}]),
+            {noreply, State#state{cb_state=CbState1, content_length=ContentLen1, buffer=Rest}, ?IDLE_TIMEOUT};
+        {ok, end_of_body} ->
+            Mod:close(Sock),
+            disconnect(State);
+        {Err, CbState1} ->
+            catch Callback:terminate(Err, CbState1),
+            {stop, Err, State}
+    end;
+
+handle_info(ClosedTuple, State)
 when is_tuple(ClosedTuple) andalso
     (element(1, ClosedTuple) == tcp_closed orelse
      element(1, ClosedTuple) == ssl_closed orelse
      element(1, ClosedTuple) == tcp_error orelse
      element(1, ClosedTuple) == ssl_error) ->
-    case catch Callback:handle_event(disconnect, CbState) of
-        {noreply, CbState1} ->
-            {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
-        {stop, Reason, CbState1} ->
-            catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, State};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, State}
-    end;
+    disconnect(State);
 
 handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=Uri, cb_mod=Callback, cb_state=CbState}=State) ->
     catch OldSockMod:close(OldSock),
@@ -237,6 +250,18 @@ code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
 
 %% Internal functions
+disconnect(#state{cb_mod=Callback, cb_state=CbState}=State) ->
+    case catch Callback:handle_event(disconnect, CbState) of
+        {noreply, CbState1} ->
+            {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
+        {stop, Reason, CbState1} ->
+            catch Callback:terminate(Reason, CbState1),
+            {stop, Reason, State};
+        {'EXIT', Err} ->
+            catch Callback:terminate(Err, CbState),
+            {stop, Err, State}
+    end.
+
 connect({Proto, _Pass, Host, Port, _Path, _}) ->
     Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
     case gen_tcp:connect(Host, Port, Opts, 5000) of
@@ -311,84 +336,6 @@ send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, Callback, CbState) ->
             {Reason, CbState1};
         {'EXIT', Err} ->
             {Err, CbState}
-    end.
-
-parse_msgs(<<>>, _Callback, CbState) ->
-    {ok, CbState, <<>>};
-
-parse_msgs(Data, Callback, CbState) ->
-    case read_size(Data) of
-        {ok, 0, _Rest} ->
-            {ok, end_of_stream};
-        {ok, Size, Rest} ->
-            case read_chunk(Rest, Size) of
-                {ok, <<"\r\n">>, Rest1} ->
-                    parse_msgs(Rest1, Callback, CbState);
-                {ok, Chunk, Rest1} ->
-                    case (catch mochijson2:decode(Chunk)) of
-                        {struct, Props} ->
-                            case catch Callback:handle_msg(Props, CbState) of
-                                {noreply, CbState1} ->
-                                    parse_msgs(Rest1, Callback, CbState1);
-                                {stop, Reason, CbState1} ->
-                                    {Reason, CbState1};
-                                {'EXIT', Err} ->
-                                    {Err, CbState}
-                            end;
-                        {'EXIT', Err} ->
-                            {Err, CbState};
-                        Err ->
-                            {Err, CbState}
-                    end;
-                eof ->
-                    {ok, CbState, Data};
-                Err ->
-                    {Err, CbState}
-            end;
-        eof ->
-            {ok, CbState, Data};
-        Err ->
-            {Err, CbState}
-    end.
-
-read_size(Data) ->
-    case read_size(Data, [], true) of
-        {ok, Line, Rest} ->
-            case io_lib:fread("~16u", Line) of
-                {ok, [Size], []} ->
-                    {ok, Size, Rest};
-                _ ->
-                    {error, {poorly_formatted_size, Line}} 
-            end;
-        Err ->
-            Err
-    end.
-
-read_size(<<>>, _, _) ->
-    eof;
-
-read_size(<<"\r\n", Rest/binary>>, Acc, _) ->
-    {ok, lists:reverse(Acc), Rest};
-
-read_size(<<$;, Rest/binary>>, Acc, _) ->
-    read_size(Rest, Acc, false);
-
-read_size(<<C, Rest/binary>>, Acc, AddToAcc) ->
-    case AddToAcc of
-        true ->
-            read_size(Rest, [C|Acc], AddToAcc);
-        false ->
-            read_size(Rest, Acc, AddToAcc)
-    end.
-
-read_chunk(Data, Size) ->
-    case Data of
-        <<Chunk:Size/binary, "\r\n", Rest/binary>> ->
-            {ok, Chunk, Rest};
-        <<_Chunk:Size/binary, _Rest/binary>> when size(_Rest) >= 2 ->
-            {error, malformed_chunk};
-        _ ->
-            eof
     end.
 
 to_binary(Bin) when is_binary(Bin) ->
