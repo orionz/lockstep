@@ -209,7 +209,7 @@ when is_tuple(ClosedTuple) andalso
      element(1, ClosedTuple) == ssl_closed orelse
      element(1, ClosedTuple) == tcp_error orelse
      element(1, ClosedTuple) == ssl_error) ->
-    disconnect(State);
+    close(State);
 
 handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=Uri, cb_mod=Callback, cb_state=CbState}=State) ->
     catch OldSockMod:close(OldSock),
@@ -250,6 +250,18 @@ code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
 
 %% Internal functions
+close(#state{cb_mod=Callback, cb_state=CbState}=State) ->
+    case catch Callback:handle_event(close, CbState) of
+        {noreply, CbState1} ->
+            {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
+        {stop, Reason, CbState1} ->
+            catch Callback:terminate(Reason, CbState1),
+            {stop, Reason, State};
+        {'EXIT', Err} ->
+            catch Callback:terminate(Err, CbState),
+            {stop, Err, State}
+    end.
+
 disconnect(#state{cb_mod=Callback, cb_state=CbState}=State) ->
     case catch Callback:handle_event(disconnect, CbState) of
         {noreply, CbState1} ->
