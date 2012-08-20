@@ -92,7 +92,7 @@ cast(Pid, Msg) ->
 %%====================================================================
 init([Callback, LockstepUrl, InitParams]) ->
     process_flag(trap_exit, true),
-    case http_uri:parse(LockstepUrl) of
+    case parse_uri(LockstepUrl) of
         {error, Err} ->
             {stop, {error, Err}, undefined};
         Uri ->
@@ -292,6 +292,12 @@ notify_callback(Err, Callback, CbState) ->
             {Reason, CbState1};
         {'EXIT', Err} ->
             {Err, CbState}
+    end.
+
+parse_uri(Url) ->
+    case http_uri:parse(Url) of
+        {ok, Uri} -> Uri;
+        Uri -> Uri
     end.
 
 ssl_upgrade(https, Sock) ->
