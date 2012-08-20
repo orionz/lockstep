@@ -250,20 +250,15 @@ code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
 
 %% Internal functions
-close(#state{cb_mod=Callback, cb_state=CbState}=State) ->
-    case catch Callback:handle_event(close, CbState) of
-        {noreply, CbState1} ->
-            {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
-        {stop, Reason, CbState1} ->
-            catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, State};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, State}
-    end.
+close(State) ->
+    handle_close_or_disconnect(close, State).
 
-disconnect(#state{cb_mod=Callback, cb_state=CbState}=State) ->
-    case catch Callback:handle_event(disconnect, CbState) of
+disconnect(State) ->
+    handle_close_or_disconnect(disconnect, State).
+
+handle_close_or_disconnect(Event, #state{cb_mod=Callback, cb_state=CbState}=State) 
+  when Event == close; Event == disconnect ->
+    case catch Callback:handle_event(Event, CbState) of
         {noreply, CbState1} ->
             {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
         {stop, Reason, CbState1} ->
