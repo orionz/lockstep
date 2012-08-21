@@ -34,6 +34,7 @@ parse_msgs(Data, Callback, CbState) ->
         {ok, Size, Rest} ->
             case read_chunk(Rest, Size) of
                 {ok, <<"\r\n">>, Rest1} ->
+                    Callback:handle_event(heartbeat, CbState),
                     parse_msgs(Rest1, Callback, CbState);
                 {ok, Chunk, Rest1} ->
                     case (catch mochijson2:decode(Chunk)) of
