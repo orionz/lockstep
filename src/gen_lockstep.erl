@@ -242,33 +242,39 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=Uri, cb_mod=C
     put(lockstep_timeouts, get(lockstep_timeouts)+1),
     put(lockstep_event_start, {handle_info, timeout}),
     catch OldSockMod:close(OldSock),
+    put(lockstep_event_start, {handle_info, timeout, connect}),
     case connect(Uri) of
         {ok, Mod, Sock} ->
+            put(lockstep_event_start, {handle_info, timeout, send_req}),
             case send_req(Sock, Mod, Uri, Callback, CbState) of
                 {ok, CbState1} ->
                     put(lockstep_event_end, {handle_info, timeout}),
                     {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1}};
                 {error, Err, CbState1} ->
+                    put(lockstep_event_start, {handle_info, timeout, notify_callback, Err}),
                     case notify_callback(Err, Callback, CbState1) of
                         {ok, CbState2} ->
-                            put(lockstep_event_end, {handle_info, error}),
+                            put(lockstep_event_end, {handle_info, timeout}),
                             {noreply, State#state{cb_state=CbState2}, 0};  
                         {Err, CbState2} ->
                             catch Callback:terminate(Err, CbState2),
-                            put(lockstep_event_end, {handle_info, error_2}),
+                            put(lockstep_event_end, {handle_info, timeout, Err}),
                             {stop, Err, State}
                     end;
                 {Err, CbState1} ->
-                    put(lockstep_event_end, {handle_info, error}),
                     catch Callback:terminate(Err, CbState1),
+                    put(lockstep_event_end, {handle_info, error, Err}),
                     {stop, Err, State}
             end;
         Err ->
+            put(lockstep_event_start, {handle_info, timeout, notify_callback, Err}),
             case notify_callback(Err, Callback, CbState) of
                 {ok, CbState1} ->
+                    put(lockstep_event_end, {handle_info, timeout}),
                     {noreply, State#state{cb_state=CbState1}, 0};  
                 {Err, CbState1} ->
                     catch Callback:terminate(Err, CbState1),
+                    put(lockstep_event_end, {handle_info, error, Err}),
                     {stop, Err, State}
             end
     end;
