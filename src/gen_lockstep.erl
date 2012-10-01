@@ -276,7 +276,9 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=Uri, cb_mod=C
 handle_info(_Message, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, #state{sock_mod=Mod, sock=Sock, cb_mod=Callback, cb_state=CbState}) ->
+    catch Callback:terminate(Reason, CbState),
+    Mod:close(Sock),
     ok.
 
 code_change(_OldVersion, State, _Extra) ->
