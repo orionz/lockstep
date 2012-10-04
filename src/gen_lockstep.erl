@@ -142,11 +142,11 @@ handle_cast(_Message, State) ->
     put(lockstep_event_end, {handle_cast, none}),
     {noreply, State}.
 
-handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod, cb_mod=Callback}=State) when Proto == tcp; Proto == ssl ->
+handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod, cb_mod=Callback}=State) when Proto == http; Proto == ssl ->
     put(lockstep_event_start, {handle_info, http_response}),
     case Status >= 200 andalso Status < 300 of
         true ->
-            Mod:setopts(Sock, [{active, once}]),
+            setopts(Mod, Sock, [{active, once}]),
             put(lockstep_event_end, {handle_info, State}),
             {noreply, State};
         false ->
@@ -155,9 +155,9 @@ handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod
             {stop, {http_status, Status}, State}
     end;
 
-handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=State) when Proto == tcp; Proto == ssl ->
+handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=State) when Proto == http; Proto == ssl ->
     put(lockstep_event_start, {handle_info, http_header}),
-    Mod:setopts(Sock, [{active, once}]),
+    setopts(Mod, Sock, [{active, once}]),
     case [Key, Val] of
         ['Transfer-Encoding', <<"chunked">>] ->
             put(lockstep_event_end, {handle_info, chunked}),
@@ -169,15 +169,15 @@ handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=S
             {noreply, State}
     end;
 
-handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod, encoding=Enc, content_length=Len}=State) when Proto == tcp; Proto == ssl ->
+handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod, encoding=Enc, content_length=Len}=State) when Proto == http; Proto == ssl ->
     put(lockstep_event_start, {handle_info, http_eoh}),
     case [Enc, Len] of
         [chunked, _] ->
-            Mod:setopts(Sock, [{active, once}, {packet, raw}]),
+            setopts(Mod, Sock, [{active, once}, {packet, raw}]),
             put(lockstep_event_end, {handle_info, chunked_parser}),
             {noreply, State#state{parser_mod=chunked_parser}};
         [_, Len] when is_integer(Len) ->
-            Mod:setopts(Sock, [{active, once}, {packet, raw}]),
+            setopts(Mod, Sock, [{active, once}, {packet, raw}]),
             put(lockstep_event_end, {handle_info, chunked_len_parser}),
             {noreply, State#state{parser_mod=content_len_parser}};
         _ ->
@@ -195,7 +195,7 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
     put(lockstep_event_start, {handle_info, chunked_parser}),
     case chunked_parser:parse_msgs(<<Buffer/binary, Data/binary>>, Callback, CbState0) of
         {ok, CbState1, Rest} ->
-            Mod:setopts(Sock, [{active, once}]),
+            setopts(Mod, Sock, [{active, once}]),
             put(lockstep_event_end, {handle_info, CbState1}),
             {noreply, State#state{cb_state=CbState1, buffer=Rest}, ?IDLE_TIMEOUT};
         {ok, end_of_stream} ->
@@ -217,7 +217,7 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
     put(lockstep_event_start, {handle_info, content_len_parser}),
     case content_len_parser:parse_msgs(<<Buffer/binary, Data/binary>>, ContentLen, Callback, CbState0) of
         {ok, CbState1, ContentLen1, Rest} ->
-            Mod:setopts(Sock, [{active, once}]),
+            setopts(Mod, Sock, [{active, once}]),
             put(lockstep_event_end, {handle_info, CbState1}),
             {noreply, State#state{cb_state=CbState1, content_length=ContentLen1, buffer=Rest}, ?IDLE_TIMEOUT};
         {ok, end_of_body} ->
@@ -394,6 +394,12 @@ send_req(Sock, Mod, {_Proto, Pass, Host, _Port, Path, _}, Callback, CbState) ->
         {'EXIT', Err} ->
             {Err, CbState}
     end.
+
+setopts(gen_tcp, Sock, Opts) ->
+    inet:setopts(Sock, Opts);
+
+setopts(ssl, Sock, Opts) ->
+    ssl:setopts(Sock, Opts).
 
 to_binary(Bin) when is_binary(Bin) ->
     Bin;
