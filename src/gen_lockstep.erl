@@ -155,10 +155,18 @@ handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod
             {stop, {http_status, Status}, State}
     end;
 
-handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=State) when Proto == http; Proto == ssl ->
+handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod, cb_mod=Callback, cb_state=CbState}=State) when Proto == http; Proto == ssl ->
     put(lockstep_event_start, {handle_info, http_header}),
     setopts(Mod, Sock, [{active, once}]),
     case [Key, Val] of
+        [<<"Instance-Name">>, InstanceName] ->
+            put(lockstep_event_end, {handle_info, chunked}),
+            case notify_callback({instance_name, InstanceName}, Callback, CbState) of
+                {ok, CbState1} ->
+                    {noreply, State#state{cb_state=CbState1}};
+                {Err, CbState1} ->
+                    {stop, Err, State#state{cb_state=CbState1}}
+            end;
         ['Transfer-Encoding', <<"chunked">>] ->
             put(lockstep_event_end, {handle_info, chunked}),
             {noreply, State#state{encoding=chunked}};
