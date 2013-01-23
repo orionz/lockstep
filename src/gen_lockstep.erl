@@ -257,13 +257,13 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=Uri, cb_mod=C
             case send_req(Sock, Mod, Uri, Callback, CbState) of
                 {ok, CbState1} ->
                     put(lockstep_event_end, {handle_info, timeout}),
-                    {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1}};
+                    {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1, buffer = <<>>}};
                 {error, Err, CbState1} ->
                     put(lockstep_event_start, {handle_info, timeout, notify_callback, Err}),
                     case notify_callback(Err, Callback, CbState1) of
                         {ok, CbState2} ->
-                            put(lockstep_event_end, {handle_info, timeout}),
-                            {noreply, State#state{cb_state=CbState2}, 0};  
+                            put(lockstep_event_end, {handle_info, error}),
+                            {noreply, State#state{cb_state=CbState2, buffer = <<>>}, 0};  
                         {Err, CbState2} ->
                             catch Callback:terminate(Err, CbState2),
                             put(lockstep_event_end, {handle_info, timeout, Err}),
@@ -279,7 +279,7 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=Uri, cb_mod=C
             case notify_callback(Err, Callback, CbState) of
                 {ok, CbState1} ->
                     put(lockstep_event_end, {handle_info, timeout}),
-                    {noreply, State#state{cb_state=CbState1}, 0};  
+                    {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};  
                 {Err, CbState1} ->
                     catch Callback:terminate(Err, CbState1),
                     put(lockstep_event_end, {handle_info, error, Err}),
