@@ -1,13 +1,15 @@
+REBAR := $(shell which rebar)
+
 all: compile
 
 compile: get-deps
-	@./rebar compile
+	$(REBAR) compile
 
 clean:
-	@./rebar clean
+	$(REBAR) clean
 
 get-deps:
-	@./rebar get-deps
+	$(REBAR) get-deps
 
 del-deps:
-	@./rebar delete-deps
+	$(REBAR) delete-deps

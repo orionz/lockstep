@@ -2,3 +2,5 @@ deps
 *.beam
 lockstep.app
 *.dets
+logs/
+rebar
