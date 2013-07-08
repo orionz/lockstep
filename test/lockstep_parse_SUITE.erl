@@ -9,12 +9,27 @@
 -include_lib("common_test/include/ct.hrl").
 -compile(export_all).
 
+groups() ->
+    [{chunked_parser, [sequence],
+      [
+       chunked_parser,
+       chunked_partial_parse
+       ,chunked_heartbeat
+       ,chunked_eof
+       ,malformed_chunk
+      ]
+     },
+     {content_len, [sequence],
+      [
+       content_len_parser
+       ,content_len_many_messages
+      ]
+     }].
+
 all() ->
-    [chunked_parser,
-     chunked_partial_parse
-     ,chunked_heartbeat
-     ,chunked_eof
-     ,malformed_chunk
+    [
+     {group, chunked_parser}
+     ,{group, content_len}
     ].
 
 init_per_suite(Config) ->
@@ -28,6 +43,12 @@ init_per_testcase(chunked_parser, Config) ->
     [{tid, Tid}|Config];
 init_per_testcase(chunked_heartbeat, Config) ->
     Tid = ets:new(chunked_heartbeat, [public]),
+    [{tid, Tid}|Config];
+init_per_testcase(content_len_parser, Config) ->
+    Tid = ets:new(content_len_parser, [public]),
+    [{tid, Tid}|Config];
+init_per_testcase(content_len_many_messages, Config) ->
+    Tid = ets:new(content_len_many_messages, [public, bag]),
     [{tid, Tid}|Config];
 init_per_testcase(_CaseName, Config) ->
     Config.
@@ -76,6 +97,32 @@ malformed_chunk(Config) ->
     Message1 = lists:reverse(tl(lists:reverse(chunkify(create_message(get_message()))))) ++ "f",
     {error, malformed_chunk} = chunked_parser:parse_msgs(to_bin(Message1), lockstep_parse_callback,
                                                          undefined),
+    Config.
+
+content_len_parser(Config) ->
+    Table = ?config(tid, Config),
+    Data = get_message(),
+    Message = create_message(Data) ++ "\n",
+    Length = length(Message),
+    Message1 = to_bin(Message),
+    {ok, _, _, <<>>} = content_len_parser:parse_msgs(Message1, Length, lockstep_parse_callback,
+                                                     {content_len_parser, Table}),
+    [{content_len_parser, Result}] = ets:lookup(Table, content_len_parser),
+    ok = compare(Data, Result),
+    Config.
+
+content_len_many_messages(Config) ->
+    Table = ?config(tid, Config),
+    Data1 = get_message(),
+    Data2 = get_message(),
+    Message = create_message(Data1) ++ "\n" ++ create_message(Data2) ++ "\n",
+    Length = length(Message),
+    Message1 = to_bin(Message),
+    {ok, _, _, <<>>} = content_len_parser:parse_msgs(Message1, Length, lockstep_parse_callback,
+                                                     {content_len_parser, Table}),
+    [{_, Message2}, {_, Message3}] = ets:lookup(Table, content_len_parser),
+    ok = compare(Data1, Message2),
+    ok = compare(Data2, Message3),
     Config.
 
 % Internal
