@@ -12,8 +12,8 @@
 
 all() ->
     [
-     connect_content_length
-     %connect_and_chunked
+     connect_content_length,
+     connect_and_chunked
     ].
 
 init_per_suite(Config) ->
@@ -30,11 +30,24 @@ init_per_testcase(connect_content_length, Config) ->
     [{url, Url},
      {server, Server},
      {tid, Tid}|Config];
+init_per_testcase(connect_and_chunked, Config) ->
+    Tid = ets:new(connect_and_chunked, [public, bag]),
+    {Server, Url} = get_server(fun(Req) ->
+                                       connect_and_chunked_loop(Req, Tid)
+                               end),
+    [{url, Url},
+     {server, Server},
+     {tid, Tid}|Config];
 init_per_testcase(_CaseName, Config) ->
     Config.
 
 end_per_testcase(connect_content_length, Config) ->
     ets:delete(?config(tid, Config)),
+    mochiweb_http:stop(?config(server, Config)),
+    Config;
+end_per_testcase(connect_and_chunked, Config) ->
+    ets:delete(?config(tid, Config)),
+    loop ! stop, % Kill the loop
     mochiweb_http:stop(?config(server, Config)),
     Config;
 end_per_testcase(_CaseName, Config) ->
@@ -46,16 +59,44 @@ connect_content_length(Config) ->
     {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback, 
                                          ?config(url, Config), [Tid]),
     true = is_pid(Pid) and is_process_alive(Pid),
-    ok = gen_lockstep:call(Pid, finish_startup, 1000),
-    {get, Values} = wait_for_value(get, Tid, future(1)),
+    bye = gen_lockstep:call(Pid, stop_test, 1000),
+    false = is_pid(Pid) and is_process_alive(Pid),
+    [{get, Values}] = wait_for_value(get, Tid, future(1)),
     'GET' = proplists:get_value(method, Values),
     "/" = proplists:get_value(path, Values),
     [{"since", "0"}] = proplists:get_value(qs, Values),
-    {msg, _Msg} = wait_for_value(msg, Tid, future(1)),
+    Config.
+
+connect_and_chunked(Config) ->
+    register(connect_and_chunked, self()),
+    Tid = ?config(tid, Config),
+    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback, 
+                                        ?config(url, Config), [Tid]),
+    ok = wait_for_messages(Tid, 2),
     bye = gen_lockstep:call(Pid, stop_test, 1000),
+    false = is_pid(Pid) and is_process_alive(Pid),
+    [{get, Values}] = wait_for_value(get, Tid, future(1)),
+    'GET' = proplists:get_value(method, Values),
+    "/" = proplists:get_value(path, Values),
+    [{"since", "0"}] = proplists:get_value(qs, Values),
     Config.
 
 %% Internal
+wait_for_messages(Tid, TotalMessages) ->
+    receive
+        sent_first ->
+            [{msg, _X}] = wait_for_value(msg, Tid, future(2)),
+            loop ! next_please,
+            wait_for_messages(Tid, TotalMessages);
+        sent_second ->
+            timer:sleep(1000),
+            [{msg, _}, {msg, _}] = wait_for_value(msg, Tid, future(2), 2),
+            loop ! next_please,
+            wait_for_messages(Tid, TotalMessages);
+        closed_chunk ->
+            ok
+    end.
+
 get_server(CallbackFun) ->
     ServerOpts = [{ip, "127.0.0.1"}, {port, 0}, {loop, CallbackFun}],
     {ok, Server} = mochiweb_http:start(ServerOpts),
@@ -64,6 +105,9 @@ get_server(CallbackFun) ->
     {Server, Url}.
 
 wait_for_value(Key, Tid, Timeout) ->
+    wait_for_value(Key, Tid, Timeout, 1).
+
+wait_for_value(Key, Tid, Timeout, Count) ->
     Now =  calendar:datetime_to_gregorian_seconds(
                  calendar:now_to_datetime(os:timestamp())
                 ),
@@ -73,8 +117,13 @@ wait_for_value(Key, Tid, Timeout) ->
                 [] ->
                     timer:sleep(10),
                     wait_for_value(Key, Tid, Timeout);
-                [Value] ->
-                    Value
+                Values when length(Values) == Count ->
+                    Values;
+                Values when length(Values) < Count ->
+                    too_many_values;
+                Values when length(Values) > Count ->
+                    timer:sleep(10),
+                    wait_for_value(Key, Tid, Timeout, Count)
             end;
         false ->
             timeout
@@ -98,6 +147,41 @@ connect_content_length_loop(Req, Tid) ->
     Message = create_message(get_message()) ++ "\n",
     Req:respond({200, [{"Content-Type", "application/json"}],
                  Message}).
+
+connect_and_chunked_loop(Req, Tid) ->
+    register(loop, self()),
+    Method = Req:get(method),
+    Path = Req:get(path),
+    Query = Req:parse_qs(),
+    ets:insert(Tid, {get, [{method, Method},
+                           {path, Path},
+                           {qs, Query}]}),
+    % We are going to send a single message to the test, then message
+    % the test to make sure it arrived. After that we send another one
+    % and close the connection.
+    Message1 = create_message(get_message()),
+    Message2 = create_message(get_message()),
+    Message3 = "",
+    whereis(connect_and_chunked) ! sent_first,
+    Resp = Req:start_response({200, [{"Content-Type", "application/json"},
+                                     {"Transfer-Encoding", "chunked"}]}),
+    ok = mochiweb_response:write_chunk(Message1, Resp),
+    connect_and_chunked ! sent_first,
+    receive
+        next_please ->
+            ok = mochiweb_response:write_chunk(Message2, Resp),
+            connect_and_chunked ! sent_second
+    end,
+    receive
+        next_please ->
+            ok = mochiweb_response:write_chunk(list_to_binary(Message3), Resp),
+            connect_and_chunked ! closed_chunk
+    end,
+    receive
+        stop ->
+            unregister(loop),
+            ok
+    end.
 
 get_message() ->
     {Mega, Secs, _} = now(),

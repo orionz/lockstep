@@ -46,7 +46,7 @@ handle_event(_, HandlerState) ->
                         {noreply, handler_state()}|
                         {stop, stop_reason(), handler_state()}.
 handle_msg(Msg, #hstate{tid=Tid}=HandlerState) ->
-    ets:insert(Tid, {msg, Msg}),
+    true = ets:insert(Tid, {msg, Msg}),
     {noreply, HandlerState}.
 
 -spec current_seq_no(handler_state()) ->
