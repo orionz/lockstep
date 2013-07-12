@@ -65,7 +65,7 @@ behaviour_info(_) ->
                 parser_mod,
                 buffer}).
 
--define(IDLE_TIMEOUT, 60000).
+-define(IDLE_TIMEOUT, get_env(idle_timeout)).
 
 %%====================================================================
 %% API functions
@@ -420,3 +420,7 @@ to_binary(Int) when is_integer(Int) ->
 
 to_binary(Atom) when is_atom(Atom) ->
     to_binary(atom_to_list(Atom)).
+
+get_env(EnvKey) ->
+    {ok, Val} = application:get_env(lockstep, EnvKey),
+    Val.

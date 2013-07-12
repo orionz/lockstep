@@ -10,5 +10,8 @@
       crypto,
       public_key,
       ssl
+  ]},
+  {env, [
+         {idle_timeout, 60000}
   ]}
  ]}.
