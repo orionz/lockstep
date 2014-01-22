@@ -1,6 +1,14 @@
 var port = parseInt(process.env["PORT"] || '4567')
 var http = require('http');
 var sys = require('sys');
+
+http.createServer(function (req, res) {
+  console.log("URL: " + req.url);
+  console.log("incoming connection");
+  res.writeHead(307, {'Location': 'http://0.0.0.0:4567'});
+  res.end();
+}).listen(port+1, "0.0.0.0");
+
 http.createServer(function (req, res) {
   console.log("URL: " + req.url);
   console.log("incoming connection");

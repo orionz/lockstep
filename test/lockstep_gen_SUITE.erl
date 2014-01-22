@@ -12,7 +12,8 @@
 
 all() ->
     [
-     connect_content_length
+     connect_redirect
+     ,connect_content_length
      ,connect_and_chunked
      ,reconnect
      ,timeout
@@ -25,6 +26,15 @@ init_per_suite(Config) ->
 end_per_suite(Config) ->
     Config.
 
+init_per_testcase(connect_redirect, Config) ->
+    Tid = ets:new(connect_redirect, [public]),
+    {Server, Url} = get_server(fun(Req) ->
+                                       {_Server, Url} = connect_content_length_loop(Req, Tid),
+                                       connect_redirect(Req, Url)
+                               end),
+    [{url, Url},
+     {server, Server},
+     {tid, Tid}|Config];
 init_per_testcase(connect_content_length, Config) ->
     Tid = ets:new(connect_content_length, [public]),
     {Server, Url} = get_server(fun(Req) ->
@@ -60,10 +70,14 @@ init_per_testcase(timeout, Config) ->
     application:set_env(lockstep, idle_timeout, 500),
     [{url, Url},
      {server, Server},
-     {tid, Tid}|Config];    
+     {tid, Tid}|Config];
 init_per_testcase(_CaseName, Config) ->
     Config.
 
+end_per_testcase(connect_redirect, Config) ->
+    ets:delete(?config(tid, Config)),
+    mochiweb_http:stop(?config(server, Config)),
+    Config;
 end_per_testcase(connect_content_length, Config) ->
     ets:delete(?config(tid, Config)),
     mochiweb_http:stop(?config(server, Config)),
@@ -87,9 +101,23 @@ end_per_testcase(_CaseName, Config) ->
     Config.
 
 %% Tests
+connect_redirect(Config) ->
+    Tid = ?config(tid, Config),
+    {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback,
+                                         ?config(url, Config), [Tid]),
+    true = is_pid(Pid) and is_process_alive(Pid),
+    bye = gen_lockstep:call(Pid, stop_test, 1000),
+    timer:sleep(1),
+    false = is_pid(Pid) and is_process_alive(Pid),
+    [{get, Values}] = wait_for_value(get, Tid, future(1)),
+    'GET' = proplists:get_value(method, Values),
+    "/" = proplists:get_value(path, Values),
+    [{"since", "0"}] = proplists:get_value(qs, Values),
+    Config.
+
 connect_content_length(Config) ->
     Tid = ?config(tid, Config),
-    {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback, 
+    {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback,
                                          ?config(url, Config), [Tid]),
     true = is_pid(Pid) and is_process_alive(Pid),
     bye = gen_lockstep:call(Pid, stop_test, 1000),
@@ -104,7 +132,7 @@ connect_content_length(Config) ->
 connect_and_chunked(Config) ->
     register(connect_and_chunked, self()),
     Tid = ?config(tid, Config),
-    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback, 
+    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
                                         ?config(url, Config), [Tid]),
     ok = wait_for_messages(Tid, 2),
     bye = gen_lockstep:call(Pid, stop_test, 1000),
@@ -121,7 +149,7 @@ connect_and_chunked(Config) ->
 reconnect(Config) ->
     register(reconnect, self()),
     Tid = ?config(tid, Config),
-    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback, 
+    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
                                         ?config(url, Config), [Tid]),
     true = is_pid(Pid) and is_process_alive(Pid),
     ok = gen_lockstep:call(Pid, ringo_starr, 1000),
@@ -141,7 +169,7 @@ reconnect(Config) ->
 timeout(Config) ->
     register(timeout, self()),
     Tid = ?config(tid, Config),
-    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback, 
+    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
                                         ?config(url, Config), [Tid]),
     true = is_pid(Pid) and is_process_alive(Pid),
     ok = gen_lockstep:call(Pid, ringo_starr, 1000),
@@ -159,6 +187,9 @@ timeout(Config) ->
     Config.
 
 %% Loops
+connect_redirect(Req, Url) ->
+    Req:respond({307, [{"Location", Url}], []}).
+
 connect_content_length_loop(Req, Tid) ->
     Method = Req:get(method),
     Path = Req:get(path),

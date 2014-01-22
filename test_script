@@ -1,11 +1,10 @@
-#!/usr/bin/env escript 
+#!/usr/bin/env escript
 %%! -pa ebin -pa deps/mochiweb/ebin
 
 main(_) ->
-  inets:start(),
-  {ok, Pid}  = lockstep:start("http://0.0.0.0:4567/servers/", { id, ip, port }, "servers.dets"),
-  Table = lockstep:ets(Pid),
-  io:format("Have ets table: ~p~n",[Table]),
-  io:format("Dump -> ~p~n",[ets:tab2list(Table)]),
-  receive ok -> ok end.
+    application:load(lockstep),
+    application:ensure_all_started(ssl),
+    inets:start(),
+    {ok, Pid}  = gen_lockstep:start_link(lockstep_cb, "http://hermes:hermes@localhost:8080/domains", []),
 
+    receive ok -> ok end.
