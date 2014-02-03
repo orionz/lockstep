@@ -134,11 +134,11 @@ handle_cast(_Message, State) ->
     {noreply, State}.
 
 handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod, cb_mod=Callback}=State) when Proto == http; Proto == ssl ->
-    case (Status >= 200 andalso Status < 300) orelse Status == 307 of
-        true ->
+    case lockstep_response(Status) of
+        success ->
             setopts(Mod, Sock, [{active, once}]),
             {noreply, State};
-        false ->
+        fail ->
             catch Callback:terminate({http_status, Status}, State#state.cb_state),
             {stop, {http_status, Status}, State}
     end;
@@ -226,7 +226,7 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=DefaultUri, s
     catch OldSockMod:close(OldSock),
     {Opts, CbState} = Callback:current_opts(CbState),
     Uri =
-        case SnapshotUri =/= undefined andalso (not proplists:get_value(update, Opts, false)) of
+        case is_snapshot_redirect(SnapshotUri, Opts) of
               true ->
                 IsRedirect = true,
                 SnapshotUri;
@@ -401,3 +401,16 @@ to_binary(Atom) when is_atom(Atom) ->
 get_env(EnvKey) ->
     {ok, Val} = application:get_env(lockstep, EnvKey),
     Val.
+
+%% Check that there is a snapshot uri set and we are not in update mode
+is_snapshot_redirect(undefined, _Opts) ->
+    false;
+is_snapshot_redirect(_SnapshotUri, Opts) ->
+    not proplists:get_value(update, Opts, false).
+
+lockstep_response(307) ->
+    success;
+lockstep_response(Status) when Status >= 200 andalso Status < 300 ->
+    success;
+lockstep_response(_) ->
+    fail.
