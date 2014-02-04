@@ -4,3 +4,4 @@ lockstep.app
 *.dets
 logs/
 rebar
+.rebarinfo
