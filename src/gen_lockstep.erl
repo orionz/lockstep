@@ -266,8 +266,9 @@ handle_info(_Message, State) ->
 
 terminate(Reason, #state{sock_mod=Mod, sock=Sock, cb_mod=Callback, cb_state=CbState}) ->
     catch Callback:terminate(Reason, CbState),
-    Mod:close(Sock),
-    ok.
+    if is_atom(Mod), Mod =/= undefined, Sock =/= undefined -> Mod:close(Sock)
+     ; true -> ok
+    end.
 
 code_change(_OldVersion, State, _Extra) ->
     {ok, State}.
