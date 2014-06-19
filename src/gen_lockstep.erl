@@ -118,13 +118,13 @@ handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) 
             {reply, Reply, State#state{cb_state=CbState1}};
         {stop, Reason, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, State#state{cb_state=CbState1}};
+            {stop, Reason, anonymize(State#state{cb_state=CbState1})};
         {stop, Reason, Reply, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, Reply, State#state{cb_state=CbState1}};
+            {stop, Reason, Reply, anonymize(State#state{cb_state=CbState1})};
         {'EXIT', Err} ->
             catch Callback:terminate(Err, CbState),
-            {stop, Err, State}
+            {stop, Err, anonymize(State)}
     end;
 
 handle_call(_Message, _From, State) ->
@@ -140,7 +140,7 @@ handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod
             {noreply, State};
         fail ->
             catch Callback:terminate({http_status, Status}, State#state.cb_state),
-            {stop, {http_status, Status}, State}
+            {stop, {http_status, Status}, anonymize(State)}
     end;
 
 handle_info({Proto, _Sock, {http_header, _, 'Location', _, Location}}, State) when Proto == http; Proto == ssl ->
@@ -154,7 +154,7 @@ handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod, c
                 {ok, CbState1} ->
                     {noreply, State#state{cb_state=CbState1}};
                 {Err, CbState1} ->
-                    {stop, Err, State#state{cb_state=CbState1}}
+                    {stop, Err, anonymize(State#state{cb_state=CbState1})}
             end;
         ['Transfer-Encoding', <<"chunked">>] ->
             {noreply, State#state{encoding=chunked}};
@@ -174,7 +174,7 @@ handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod
             {noreply, State#state{parser_mod=content_len_parser}};
         _ ->
             catch Callback:terminate({error, unrecognized_encoding}, State#state.cb_state),
-            {stop, {error, unrecognized_encoding}, State}
+            {stop, {error, unrecognized_encoding}, anonymize(State)}
     end;
 
 handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
@@ -192,7 +192,7 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
             disconnect(State);
         {Err, CbState1} ->
             catch Callback:terminate(Err, CbState1),
-            {stop, Err, State}
+            {stop, Err, anonymize(State)}
     end;
 
 handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
@@ -211,7 +211,7 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
             disconnect(State);
         {Err, CbState1} ->
             catch Callback:terminate(Err, CbState1),
-            {stop, Err, State}
+            {stop, Err, anonymize(State)}
     end;
 
 handle_info(ClosedTuple, State)
@@ -245,11 +245,11 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=DefaultUri, s
                             {noreply, State#state{cb_state=CbState2, buffer = <<>>}, 0};
                         {Err, CbState2} ->
                             catch Callback:terminate(Err, CbState2),
-                            {stop, Err, State}
+                            {stop, Err, anonymize(State)}
                     end;
                 {Err, CbState1} ->
                     catch Callback:terminate(Err, CbState1),
-                    {stop, Err, State}
+                    {stop, Err, anonymize(State)}
             end;
         Err ->
             case notify_callback(Err, Callback, CbState) of
@@ -257,7 +257,7 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=DefaultUri, s
                     {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
                 {Err, CbState1} ->
                     catch Callback:terminate(Err, CbState1),
-                    {stop, Err, State}
+                    {stop, Err, anonymize(State)}
             end
     end;
 
@@ -287,10 +287,10 @@ handle_close_or_disconnect(Event, #state{cb_mod=Callback, cb_state=CbState}=Stat
             {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
         {stop, Reason, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, State};
+            {stop, Reason, anonymize(State)};
         {'EXIT', Err} ->
             catch Callback:terminate(Err, CbState),
-            {stop, Err, State}
+            {stop, Err, anonymize(State)}
     end.
 
 connect({Proto, _Pass, Host, Port, _Path, _}) ->
@@ -415,3 +415,17 @@ lockstep_response(Status) when Status >= 200 andalso Status < 300 ->
     success;
 lockstep_response(_) ->
     fail.
+
+%% Remove credentials in the URL if any
+%%
+anonymize(State=#state{uri=Uri, snapshot_uri=SnapUri}) ->
+    State#state{uri=hide_pass(Uri), snapshot_uri=hide_pass(SnapUri)}.
+
+hide_pass(undefined) -> undefined;
+hide_pass({Scheme, UserInfo, Host, Port, Path, Query}) ->
+    UInfo = case string:tokens(UserInfo, ":") of
+        [User,_Pass] -> User ++ ":***********";
+        [_Term] -> "***********";
+        "" -> ""
+    end,
+    {Scheme, UInfo, Host, Port, Path, Query}.
