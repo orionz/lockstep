@@ -80,9 +80,8 @@
          terminate/2,
          code_change/3]).
 
-
--record(state, {uri,
-                snapshot_uri,
+-record(state, {url,
+                snapshot_url,
                 cb_state,
                 cb_mod,
                 sock,
@@ -97,12 +96,12 @@
 %%====================================================================
 %% API functions
 %%====================================================================
--spec start_link(atom(), list(), [any()]) -> ok | ignore | {error, any()}.
+-spec start_link(atom(), url(),  [any()]) -> ok | ignore | {error, any()}.
 start_link(CallbackModule, LockstepUrl, InitParams) ->
     gen_server:start_link(?MODULE, [CallbackModule, LockstepUrl, InitParams],
                           [{spawn_opt, [{fullsweep_after, 0}]}]).
 
--spec start_link(atom(), atom(), list(), [any()]) -> ok | ignore | {error, any()}.
+-spec start_link(atom(), atom(), url(), [any()]) -> ok | ignore | {error, any()}.
 start_link(RegisterName, CallbackModule, LockstepUrl, InitParams) ->
     gen_server:start_link({local, RegisterName}, ?MODULE,
                           [CallbackModule, LockstepUrl, InitParams],
@@ -122,13 +121,13 @@ init([Callback, LockstepUrl, InitParams]) ->
     case parse_uri(LockstepUrl) of
         {error, Err} ->
             {stop, {error, Err}, undefined};
-        Uri ->
+        _Uri ->
             case catch Callback:init(InitParams) of
                 {ok, CbState} ->
                     {ok, #state{
                         cb_state = CbState,
                         cb_mod = Callback,
-                        uri = Uri,
+                        url = LockstepUrl,
                         buffer = <<>>
                     }, 0};
                 {stop, Err} ->
@@ -170,8 +169,7 @@ handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod
     end;
 
 handle_info({Proto, _Sock, {http_header, _, 'Location', _, Location}}, State) when Proto == http; Proto == ssl ->
-    Uri = parse_uri(binary_to_list(Location)),
-    {noreply, State#state{snapshot_uri=Uri}, 0};
+    {noreply, State#state{snapshot_url=binary_to_list(Location)}, 0};
 handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod, cb_mod=Callback, cb_state=CbState}=State) when Proto == http; Proto == ssl ->
     setopts(Mod, Sock, [{active, once}]),
     case [Key, Val] of
@@ -248,20 +246,20 @@ when is_tuple(ClosedTuple) andalso
      element(1, ClosedTuple) == ssl_error) ->
     close(State);
 
-handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=DefaultUri, snapshot_uri=SnapshotUri, cb_mod=Callback, cb_state=CbState}=State) ->
+handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, url=DefaultUrl, snapshot_url=SnapshotUri, cb_mod=Callback, cb_state=CbState}=State) ->
     catch OldSockMod:close(OldSock),
     {Opts, CbState} = Callback:current_opts(CbState),
-    Uri =
+    Url =
         case is_snapshot_redirect(SnapshotUri, Opts) of
               true ->
                 IsRedirect = true,
                 SnapshotUri;
               false ->
                 IsRedirect = false,
-                DefaultUri
+                DefaultUrl
           end,
-    case connect(Uri) of
-        {ok, Mod, Sock} ->
+    case connect(Url) of
+        {ok, Mod, Sock, Uri} ->
             case send_req(IsRedirect, Sock, Mod, Uri, Callback, CbState) of
                 {ok, CbState1} ->
                     {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1, buffer = <<>>}};
@@ -319,13 +317,19 @@ handle_close_or_disconnect(Event, #state{cb_mod=Callback, cb_state=CbState}=Stat
             {stop, Err, anonymize(State)}
     end.
 
-connect({Proto, _Pass, Host, Port, _Path, _}) ->
+connect(UrlFun) when is_function(UrlFun) ->
+    Uri  = parse_uri(UrlFun()),
+    connect(Uri);
+connect(Url) when is_list(Url) ->
+    Uri = parse_uri(Url),
+    connect(Uri);
+connect({Proto, _Pass, Host, Port, _Path, _}=Uri) ->
     Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
     case gen_tcp:connect(Host, Port, Opts, 5000) of
         {ok, Sock} ->
             case ssl_upgrade(Proto, Sock) of
                 {ok, Mod, Sock1} ->
-                    {ok, Mod, Sock1};
+                    {ok, Mod, Sock1, Uri};
                 Err ->
                     gen_tcp:close(Sock),
                     Err
@@ -344,6 +348,9 @@ notify_callback(Err, Callback, CbState) ->
             {Err, CbState}
     end.
 
+parse_uri(undefined) -> undefined;
+parse_uri(UrlFun) when is_function(UrlFun) ->
+    parse_uri(UrlFun());
 parse_uri(Url) ->
     case http_uri:parse(Url) of
         {ok, Uri} -> Uri;
@@ -444,8 +451,9 @@ lockstep_response(_) ->
 
 %% Remove credentials in the URL if any
 %%
-anonymize(State=#state{uri=Uri, snapshot_uri=SnapUri}) ->
-    State#state{uri=hide_pass(Uri), snapshot_uri=hide_pass(SnapUri)}.
+anonymize(State=#state{url=Url, snapshot_url=SnapUrl}) ->
+    State#state{url=hide_pass(parse_uri(Url)),
+                snapshot_url=hide_pass(parse_uri(SnapUrl))}.
 
 hide_pass(undefined) -> undefined;
 hide_pass({Scheme, UserInfo, Host, Port, Path, Query}) ->
