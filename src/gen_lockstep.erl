@@ -57,10 +57,15 @@
                                       Reason :: term().
 -callback handle_event(Event, HandlerState) ->
     {noreply, HandlerState} |
+    {connect_url, Url, HandlerState} |
     {stop, Reason, HandlerState} when Event :: connect|close|disconnect|
                                                {instance_name, binary()}|
+                                               {client_error, 400..417}|
+                                               {server_error, 500..505}|
+                                               {http_error, non_neg_integer()}|
                                                {error, inet:posix()|term()},
                                       HandlerState :: term(),
+                                      Url :: url(),
                                       Reason :: term().
 -callback current_seq_no(HandlerState) ->
     {NewSeqNumber, HandlerState} when NewSeqNumber :: non_neg_integer(),
@@ -158,28 +163,30 @@ handle_call(_Message, _From, State) ->
 handle_cast(_Message, State) ->
     {noreply, State}.
 
-handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod, cb_mod=Callback}=State) when Proto == http; Proto == ssl ->
+handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod, cb_mod=Callback}=State)
+  when Proto == http; Proto == ssl ->
     case lockstep_response(Status) of
         success ->
             setopts(Mod, Sock, [{active, once}]),
             {noreply, State};
+        client_error ->
+            notify_callback({client_error, Status}, State);
+        server_error ->
+            notify_callback({server_error, Status}, State);
         fail ->
             catch Callback:terminate({http_status, Status}, State#state.cb_state),
             {stop, {http_status, Status}, anonymize(State)}
     end;
 
-handle_info({Proto, _Sock, {http_header, _, 'Location', _, Location}}, State) when Proto == http; Proto == ssl ->
+handle_info({Proto, _Sock, {http_header, _, 'Location', _, Location}}, State)
+  when Proto == http; Proto == ssl ->
     {noreply, State#state{snapshot_url=binary_to_list(Location)}, 0};
-handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod, cb_mod=Callback, cb_state=CbState}=State) when Proto == http; Proto == ssl ->
+handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=State)
+  when Proto == http; Proto == ssl ->
     setopts(Mod, Sock, [{active, once}]),
     case [Key, Val] of
         [<<"Instance-Name">>, InstanceName] ->
-            case notify_callback({instance_name, InstanceName}, Callback, CbState) of
-                {ok, CbState1} ->
-                    {noreply, State#state{cb_state=CbState1}};
-                {Err, CbState1} ->
-                    {stop, Err, anonymize(State#state{cb_state=CbState1})}
-            end;
+            notify_callback({instance_name, InstanceName}, State);
         ['Transfer-Encoding', <<"chunked">>] ->
             {noreply, State#state{encoding=chunked}};
         ['Content-Length', ContentLength] ->
@@ -264,25 +271,13 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, url=DefaultUrl, s
                 {ok, CbState1} ->
                     {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1, buffer = <<>>}};
                 {error, Err, CbState1} ->
-                    case notify_callback(Err, Callback, CbState1) of
-                        {ok, CbState2} ->
-                            {noreply, State#state{cb_state=CbState2, buffer = <<>>}, 0};
-                        {Err, CbState2} ->
-                            catch Callback:terminate(Err, CbState2),
-                            {stop, Err, anonymize(State)}
-                    end;
+                    notify_callback(Err, State#state{cb_state=CbState1});
                 {Err, CbState1} ->
                     catch Callback:terminate(Err, CbState1),
                     {stop, Err, anonymize(State)}
             end;
         Err ->
-            case notify_callback(Err, Callback, CbState) of
-                {ok, CbState1} ->
-                    {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
-                {Err, CbState1} ->
-                    catch Callback:terminate(Err, CbState1),
-                    {stop, Err, anonymize(State)}
-            end
+            notify_callback(Err, State)
     end;
 
 handle_info(_Message, State) ->
@@ -338,14 +333,27 @@ connect({Proto, _Pass, Host, Port, _Path, _}=Uri) ->
             Err
     end.
 
-notify_callback(Err, Callback, CbState) ->
-    case catch Callback:handle_event(Err, CbState) of
+notify_callback(Message, #state{cb_mod=CbModule, cb_state=CbState, sock=Sock,
+                                sock_mod=SockMod}=State) ->
+    case catch CbModule:handle_event(Message, CbState) of
         {noreply, CbState1} ->
-            {ok, CbState1};
+            {noreply, State#state{cb_state=CbState1}};
+        {connect_url, Url, CbState1} ->
+            catch SockMod:close(Sock),
+            {noreply, State#state{url=Url,
+                                  snapshot_url=undefined,
+                                  sock=undefined,
+                                  sock_mod=undefined,
+                                  encoding=undefined,
+                                  content_length=undefined,
+                                  buffer = <<>>,
+                                  cb_state=CbState1}, 0};
         {stop, Reason, CbState1} ->
-            {Reason, CbState1};
-        {'EXIT', Err} ->
-            {Err, CbState}
+            catch CbModule:terminate(Reason, CbState1),
+            {stop, Reason, anonymize(State#state{cb_state=CbState1})};
+        {'EXIT', Error} ->
+            catch CbModule:terminate(Error, CbState),
+            {stop, Error, anonymize(State)}
     end.
 
 parse_uri(undefined) -> undefined;
@@ -446,6 +454,10 @@ lockstep_response(307) ->
     success;
 lockstep_response(Status) when Status >= 200 andalso Status < 300 ->
     success;
+lockstep_response(Status) when Status >= 400 andalso Status < 500 ->
+    client_error;
+lockstep_response(Status) when Status >= 500 andalso Status < 600 ->
+    server_error;
 lockstep_response(_) ->
     fail.
 
