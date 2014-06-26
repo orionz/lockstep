@@ -245,12 +245,11 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
             {stop, Err, anonymize(State)}
     end;
 
-handle_info(ClosedTuple, State)
-when is_tuple(ClosedTuple) andalso
-    (element(1, ClosedTuple) == tcp_closed orelse
-     element(1, ClosedTuple) == ssl_closed orelse
-     element(1, ClosedTuple) == tcp_error orelse
-     element(1, ClosedTuple) == ssl_error) ->
+handle_info(ClosedTuple, State) when is_tuple(ClosedTuple) andalso
+                                     (element(1, ClosedTuple) == tcp_closed orelse
+                                      element(1, ClosedTuple) == ssl_closed orelse
+                                      element(1, ClosedTuple) == tcp_error orelse
+                                      element(1, ClosedTuple) == ssl_error) ->
     close(State);
 
 handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, url=DefaultUrl, snapshot_url=SnapshotUri, cb_mod=Callback, cb_state=CbState}=State) ->
