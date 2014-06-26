@@ -31,8 +31,46 @@
          call/3,
          cast/2]).
 
-%% Behavior callbacks
--export([behaviour_info/1]).
+%% Types
+-type url() :: list()|fun(() -> list()).
+-type lockstep_message() :: [{binary(), term()}].
+-export_type([url/0, lockstep_message/0]).
+
+
+-callback init(Url) ->
+    {stop, Error} |
+    {ok, HandlerState} when Url :: url(),
+                            Error :: term(),
+                            HandlerState :: term().
+-callback handle_call(Message, From, HandlerState) ->
+    {reply, Reply, HandlerState} |
+    {stop, Reason, HandlerState} |
+    {stop, Reason, Reply, HandlerState} when Message :: term(),
+                                             From :: pid(),
+                                             HandlerState :: term(),
+                                             Reply :: term(),
+                                             Reason :: term().
+-callback handle_msg(Message, HandlerState) ->
+    {noreply, HandlerState} |
+    {stop, Reason, HandlerState} when Message :: lockstep_message(),
+                                      HandlerState :: term(),
+                                      Reason :: term().
+-callback handle_event(Event, HandlerState) ->
+    {noreply, HandlerState} |
+    {stop, Reason, HandlerState} when Event :: connect|close|disconnect|
+                                               {instance_name, binary()}|
+                                               {error, inet:posix()|term()},
+                                      HandlerState :: term(),
+                                      Reason :: term().
+-callback current_seq_no(HandlerState) ->
+    {NewSeqNumber, HandlerState} when NewSeqNumber :: non_neg_integer(),
+                                      HandlerState :: term().
+-callback current_opts(HandlerState) ->
+    {Opts, HandlerState} when Opts :: [{update, boolean()}|{binary(), binary()}],
+                              HandlerState :: term().
+-callback terminate(Reason, HandlerState) ->
+    ok when Reason :: term(),
+            HandlerState :: term().
 
 %% gen_server callbacks
 -export([init/1,
@@ -42,18 +80,6 @@
          terminate/2,
          code_change/3]).
 
-%% @hidden
-behaviour_info(callbacks) ->
-    [{init, 1},
-     {handle_call, 3},
-     {handle_msg, 2},
-     {handle_event, 2},
-     {current_seq_no, 1},
-     {current_opts, 1},
-     {terminate, 2}];
-
-behaviour_info(_) ->
-    undefined.
 
 -record(state, {uri,
                 snapshot_uri,
