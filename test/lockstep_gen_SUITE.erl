@@ -13,10 +13,12 @@
 all() ->
     [
      connect_redirect
-     ,connect_content_length
-     ,connect_and_chunked
-     ,reconnect
-     ,timeout
+    ,connect_content_length
+    ,connect_and_chunked
+    ,reconnect
+    ,timeout
+    ,connect_url_fun
+    ,unauthorized
     ].
 
 init_per_suite(Config) ->
@@ -71,6 +73,25 @@ init_per_testcase(timeout, Config) ->
     [{url, Url},
      {server, Server},
      {tid, Tid}|Config];
+init_per_testcase(connect_url_fun, Config) ->
+    Tid = ets:new(connect_url_fun, [public]),
+    {Server, Url} = get_server(fun(Req) ->
+                                       connect_content_length_loop(Req, Tid)
+                               end),
+    [{url, Url},
+     {server, Server},
+     {tid, Tid}|Config];
+init_per_testcase(unauthorized, Config) ->
+    Tid = ets:new(unauthorized, [public]),
+    {Server, Url} = get_server(fun(Req) ->
+                                       unauthorized_loop(Req, Tid)
+                               end),
+    {ok, {http, _, Host, Port, _, _}} = http_uri:parse(Url),
+    Url1 = "http://bad:auth@" ++ Host ++ ":" ++ integer_to_list(Port),
+    true = ets:insert(Tid, {correct_url, "http://correct:auth@" ++ Host ++ ":" ++ integer_to_list(Port)}),
+    [{url, Url1},
+     {server, Server},
+     {tid, Tid}|Config];
 init_per_testcase(_CaseName, Config) ->
     Config.
 
@@ -87,14 +108,21 @@ end_per_testcase(connect_and_chunked, Config) ->
     loop ! stop, % Kill the loop
     mochiweb_http:stop(?config(server, Config)),
     Config;
+end_per_testcase(timeout, Config) ->
+    ets:delete(?config(tid, Config)),
+    mochiweb_http:stop(?config(server, Config)),
+    Config;
 end_per_testcase(reconnect, Config) ->
     ets:delete(?config(tid, Config)),
     loop ! stop, % Kill the loop
     mochiweb_http:stop(?config(server, Config)),
     Config;
-end_per_testcase(timeout, Config) ->
+end_per_testcase(connect_url_fun, Config) ->
     ets:delete(?config(tid, Config)),
-    % loop ! stop, % Kill the loop
+    mochiweb_http:stop(?config(server, Config)),
+    Config;
+end_per_testcase(unauthorized, Config) ->
+    ets:delete(?config(tid, Config)),
     mochiweb_http:stop(?config(server, Config)),
     Config;
 end_per_testcase(_CaseName, Config) ->
@@ -133,7 +161,7 @@ connect_and_chunked(Config) ->
     register(connect_and_chunked, self()),
     Tid = ?config(tid, Config),
     {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
-                                        ?config(url, Config), [Tid]),
+                                        ?config(url, Config) ,[Tid]),
     ok = wait_for_messages(Tid, 2),
     bye = gen_lockstep:call(Pid, stop_test, 1000),
     timer:sleep(1),
@@ -144,9 +172,9 @@ connect_and_chunked(Config) ->
     [{"since", "0"}] = proplists:get_value(qs, Values),
     Config.
 
-% Connect to the lockstep server and make the gen_lockstep server
-% reconnect once by not sending any data the first time.
 reconnect(Config) ->
+    % Connect to the lockstep server and make the gen_lockstep server
+    % reconnect once by not sending any data the first time.
     register(reconnect, self()),
     Tid = ?config(tid, Config),
     {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
@@ -165,8 +193,8 @@ reconnect(Config) ->
     bye = gen_lockstep:call(Pid, stop_test, 1000),
     Config.
 
-% Check timeout
 timeout(Config) ->
+    % Check timeout
     register(timeout, self()),
     Tid = ?config(tid, Config),
     {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
@@ -184,6 +212,35 @@ timeout(Config) ->
             loop ! close
     end,
     bye = gen_lockstep:call(Pid, stop_test, 1000),
+    Config.
+
+connect_url_fun(Config) ->
+    Tid = ?config(tid, Config),
+    {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback,
+                                         fun() -> ?config(url, Config) end,
+                                         [Tid]),
+    true = is_pid(Pid) and is_process_alive(Pid),
+    bye = gen_lockstep:call(Pid, stop_test, 1000),
+    timer:sleep(1),
+    false = is_pid(Pid) and is_process_alive(Pid),
+    [{get, Values}] = wait_for_value(get, Tid, future(1)),
+    'GET' = proplists:get_value(method, Values),
+    "/" = proplists:get_value(path, Values),
+    [{"since", "0"}] = proplists:get_value(qs, Values),
+    Config.
+
+unauthorized(Config) ->
+    Tid = ?config(tid, Config),
+    {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback,
+                                         ?config(url, Config), [Tid]),
+    true = is_pid(Pid) and is_process_alive(Pid),
+    % Wait for the changed_url key in the ets table to be set to true
+    ok = wait_for_key(Tid, changed_url, 5),
+    bye = gen_lockstep:call(Pid, stop_test, 1000),
+    [{get, Values}] = wait_for_value(get, Tid, future(1)),
+    'GET' = proplists:get_value(method, Values),
+    "/" = proplists:get_value(path, Values),
+    [{"since", "0"}] = proplists:get_value(qs, Values),
     Config.
 
 %% Loops
@@ -263,6 +320,19 @@ timeout_loop(Req, Tid) ->
             unregister(loop)
     end.
 
+unauthorized_loop(Req, Tid) ->
+    Method = Req:get(method),
+    Path = Req:get(path),
+    Query = Req:parse_qs(),
+    case Req:get_header_value("authorization") of
+        "Basic YmFkOmF1dGg=" -> % Wrong pass
+            Req:respond({401, [], []});
+        "Basic Y29ycmVjdDphdXRo" -> % Correct pass
+            ets:insert(Tid, {get, [{method, Method},
+                                   {path, Path},
+                                   {qs, Query}]})
+    end.
+
 %% Internal
 wait_for_register(Name) ->
     case whereis(Name) of
@@ -312,10 +382,21 @@ wait_for_value(Key, Tid, Timeout, Count) ->
                     timer:sleep(10),
                     wait_for_value(Key, Tid, Timeout, Count);
                 Values when length(Values) > Count ->
-                    too_many_values
+                    throw(too_many_values)
             end;
         false ->
-            timeout
+            throw(timeout)
+    end.
+
+wait_for_key(_, _, 0) ->
+    throw(timeout_waiting_for_key);
+wait_for_key(Tid, Key, Tries) ->
+    case ets:lookup(Tid, changed_url) of
+        [] ->
+            timer:sleep(10),
+            wait_for_key(Tid, Key, Tries-1);
+        [_] ->
+            ok
     end.
 
 future(Seconds) ->

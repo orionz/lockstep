@@ -39,7 +39,11 @@ handle_call(_Msg, _From, HandlerState) ->
 -spec handle_event(event(), handler_state()) ->
                           {noreply, handler_state()}|
                           {stop, stop_reason(), handler_state()}.
-handle_event(_, HandlerState) ->
+handle_event({client_error, 401}, #hstate{tid=Tid}=HandlerState) ->
+    [{correct_url, CorrectURL}] = ets:lookup(Tid, correct_url),
+    true = ets:insert(Tid, {changed_url, true}),
+    {connect_url, CorrectURL, HandlerState};
+handle_event(_Event, HandlerState) ->
     {noreply, HandlerState}.
 
 -spec handle_msg(lockstep_message(), handler_state()) ->
