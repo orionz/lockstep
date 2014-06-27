@@ -32,7 +32,7 @@
          cast/2]).
 
 %% Types
--type url() :: list()|fun(() -> list()).
+-type url() :: list().
 -type lockstep_message() :: [{binary(), term()}].
 -export_type([url/0, lockstep_message/0]).
 
@@ -307,9 +307,6 @@ handle_close_or_disconnect(Event, State)
             Else
     end.
 
-connect(UrlFun) when is_function(UrlFun) ->
-    Uri  = parse_uri(UrlFun()),
-    connect(Uri);
 connect(Url) when is_list(Url) ->
     Uri = parse_uri(Url),
     connect(Uri);
@@ -353,8 +350,6 @@ notify_callback(Message, #state{cb_mod=CbModule, cb_state=CbState, sock=Sock,
     end.
 
 parse_uri(undefined) -> undefined;
-parse_uri(UrlFun) when is_function(UrlFun) ->
-    parse_uri(UrlFun());
 parse_uri(Url) ->
     case http_uri:parse(Url) of
         {ok, Uri} -> Uri;

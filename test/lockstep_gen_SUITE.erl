@@ -17,7 +17,6 @@ all() ->
     ,connect_and_chunked
     ,reconnect
     ,timeout
-    ,connect_url_fun
     ,unauthorized
     ].
 
@@ -70,14 +69,6 @@ init_per_testcase(timeout, Config) ->
                                        timeout_loop(Req, Tid)
                                end),
     application:set_env(lockstep, idle_timeout, 500),
-    [{url, Url},
-     {server, Server},
-     {tid, Tid}|Config];
-init_per_testcase(connect_url_fun, Config) ->
-    Tid = ets:new(connect_url_fun, [public]),
-    {Server, Url} = get_server(fun(Req) ->
-                                       connect_content_length_loop(Req, Tid)
-                               end),
     [{url, Url},
      {server, Server},
      {tid, Tid}|Config];
@@ -220,21 +211,6 @@ timeout(Config) ->
             throw(timeout)
     end,
     bye = gen_lockstep:call(Pid, stop_test, 1000),
-    Config.
-
-connect_url_fun(Config) ->
-    Tid = ?config(tid, Config),
-    {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback,
-                                         fun() -> ?config(url, Config) end,
-                                         [Tid]),
-    true = is_pid(Pid) and is_process_alive(Pid),
-    bye = gen_lockstep:call(Pid, stop_test, 1000),
-    timer:sleep(1),
-    false = is_pid(Pid) and is_process_alive(Pid),
-    [{get, Values}] = wait_for_value(get, Tid, future(1)),
-    'GET' = proplists:get_value(method, Values),
-    "/" = proplists:get_value(path, Values),
-    [{"since", "0"}] = proplists:get_value(qs, Values),
     Config.
 
 unauthorized(Config) ->
