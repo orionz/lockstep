@@ -138,8 +138,8 @@ init([Callback, LockstepUrl, InitParams]) ->
                 {stop, Err} ->
                     {stop, Err}
             catch
-                _Error:_Reason = Error ->
-                    {stop, Error}
+                _:Reason ->
+                    {stop, Reason}
             end
     end.
 
@@ -154,9 +154,9 @@ handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) 
             catch Callback:terminate(Reason, CbState1),
             {stop, Reason, Reply, anonymize(State#state{cb_state=CbState1})}
     catch
-        _Error:_Reason = Error ->
-            catch Callback:terminate(Error, CbState),
-            {stop, Error, anonymize(State)}
+        _:Reason ->
+            catch Callback:terminate(Reason, CbState),
+            {stop, Reason, anonymize(State)}
     end;
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
@@ -344,7 +344,7 @@ notify_callback(Message, #state{cb_mod=CbModule, cb_state=CbState, sock=Sock,
             catch CbModule:terminate(Reason, CbState1),
             {stop, Reason, anonymize(State#state{cb_state=CbState1})}
     catch
-        _Error:_Details=Error ->
+        _:Error ->
             catch CbModule:terminate(Error, CbState),
             {stop, Error, anonymize(State)}
     end.
@@ -410,7 +410,7 @@ send_req(IsRedirect, Sock, Mod, {_Proto, Pass, Host, _Port, Path, QS}, Callback,
         {stop, Reason, CbState1} ->
             {Reason, CbState1}
     catch
-        _Error:_Reason = Error ->
+        _:Error ->
             {Error, CbState}
     end.
 
