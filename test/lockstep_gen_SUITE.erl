@@ -161,7 +161,7 @@ connect_and_chunked(Config) ->
     register(connect_and_chunked, self()),
     Tid = ?config(tid, Config),
     {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
-                                        ?config(url, Config) ,[Tid]),
+                                        ?config(url, Config), [Tid]),
     ok = wait_for_messages(Tid, 2),
     bye = gen_lockstep:call(Pid, stop_test, 1000),
     timer:sleep(1),
