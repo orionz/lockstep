@@ -31,8 +31,51 @@
          call/3,
          cast/2]).
 
-%% Behavior callbacks
--export([behaviour_info/1]).
+%% Types
+-type url() :: list().
+-type lockstep_message() :: [{binary(), term()}].
+-export_type([url/0, lockstep_message/0]).
+
+
+-callback init(Url) ->
+    {stop, Error} |
+    {ok, HandlerState} when Url :: url(),
+                            Error :: term(),
+                            HandlerState :: term().
+-callback handle_call(Message, From, HandlerState) ->
+    {reply, Reply, HandlerState} |
+    {stop, Reason, HandlerState} |
+    {stop, Reason, Reply, HandlerState} when Message :: term(),
+                                             From :: pid(),
+                                             HandlerState :: term(),
+                                             Reply :: term(),
+                                             Reason :: term().
+-callback handle_msg(Message, HandlerState) ->
+    {noreply, HandlerState} |
+    {stop, Reason, HandlerState} when Message :: lockstep_message(),
+                                      HandlerState :: term(),
+                                      Reason :: term().
+-callback handle_event(Event, HandlerState) ->
+    {noreply, HandlerState} |
+    {connect_url, Url, HandlerState} |
+    {stop, Reason, HandlerState} when Event :: connect|close|disconnect|
+                                               {instance_name, binary()}|
+                                               {client_error, 400..417}|
+                                               {server_error, 500..505}|
+                                               {http_error, non_neg_integer()}|
+                                               {error, inet:posix()|term()},
+                                      HandlerState :: term(),
+                                      Url :: url(),
+                                      Reason :: term().
+-callback current_seq_no(HandlerState) ->
+    {NewSeqNumber, HandlerState} when NewSeqNumber :: non_neg_integer(),
+                                      HandlerState :: term().
+-callback current_opts(HandlerState) ->
+    {Opts, HandlerState} when Opts :: [{update, boolean()}|{binary(), binary()}],
+                              HandlerState :: term().
+-callback terminate(Reason, HandlerState) ->
+    ok when Reason :: term(),
+            HandlerState :: term().
 
 %% gen_server callbacks
 -export([init/1,
@@ -42,21 +85,8 @@
          terminate/2,
          code_change/3]).
 
-%% @hidden
-behaviour_info(callbacks) ->
-    [{init, 1},
-     {handle_call, 3},
-     {handle_msg, 2},
-     {handle_event, 2},
-     {current_seq_no, 1},
-     {current_opts, 1},
-     {terminate, 2}];
-
-behaviour_info(_) ->
-    undefined.
-
--record(state, {uri,
-                snapshot_uri,
+-record(state, {url,
+                snapshot_url,
                 cb_state,
                 cb_mod,
                 sock,
@@ -71,12 +101,12 @@ behaviour_info(_) ->
 %%====================================================================
 %% API functions
 %%====================================================================
--spec start_link(atom(), list(), [any()]) -> ok | ignore | {error, any()}.
+-spec start_link(atom(), url(),  [any()]) -> ok | ignore | {error, any()}.
 start_link(CallbackModule, LockstepUrl, InitParams) ->
     gen_server:start_link(?MODULE, [CallbackModule, LockstepUrl, InitParams],
                           [{spawn_opt, [{fullsweep_after, 0}]}]).
 
--spec start_link(atom(), atom(), list(), [any()]) -> ok | ignore | {error, any()}.
+-spec start_link(atom(), atom(), url(), [any()]) -> ok | ignore | {error, any()}.
 start_link(RegisterName, CallbackModule, LockstepUrl, InitParams) ->
     gen_server:start_link({local, RegisterName}, ?MODULE,
                           [CallbackModule, LockstepUrl, InitParams],
@@ -96,24 +126,25 @@ init([Callback, LockstepUrl, InitParams]) ->
     case parse_uri(LockstepUrl) of
         {error, Err} ->
             {stop, {error, Err}, undefined};
-        Uri ->
-            case catch Callback:init(InitParams) of
+        _Uri ->
+            try Callback:init(InitParams) of
                 {ok, CbState} ->
                     {ok, #state{
-                        cb_state = CbState,
-                        cb_mod = Callback,
-                        uri = Uri,
-                        buffer = <<>>
-                    }, 0};
+                            cb_state = CbState,
+                            cb_mod = Callback,
+                            url = LockstepUrl,
+                            buffer = <<>>
+                           }, 0};
                 {stop, Err} ->
-                    {stop, Err};
-                {'EXIT', Err} ->
                     {stop, Err}
+            catch
+                _:Reason ->
+                    {stop, Reason}
             end
     end.
 
 handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) ->
-    case catch Callback:handle_call(Msg, From, CbState) of
+    try Callback:handle_call(Msg, From, CbState) of
         {reply, Reply, CbState1} ->
             {reply, Reply, State#state{cb_state=CbState1}};
         {stop, Reason, CbState1} ->
@@ -121,41 +152,41 @@ handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) 
             {stop, Reason, anonymize(State#state{cb_state=CbState1})};
         {stop, Reason, Reply, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, Reply, anonymize(State#state{cb_state=CbState1})};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, anonymize(State)}
+            {stop, Reason, Reply, anonymize(State#state{cb_state=CbState1})}
+    catch
+        _:Reason ->
+            catch Callback:terminate(Reason, CbState),
+            {stop, Reason, anonymize(State)}
     end;
-
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
 handle_cast(_Message, State) ->
     {noreply, State}.
 
-handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod, cb_mod=Callback}=State) when Proto == http; Proto == ssl ->
+handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod, cb_mod=Callback}=State)
+  when Proto == http; Proto == ssl ->
     case lockstep_response(Status) of
         success ->
             setopts(Mod, Sock, [{active, once}]),
             {noreply, State};
+        client_error ->
+            notify_callback({client_error, Status}, State);
+        server_error ->
+            notify_callback({server_error, Status}, State);
         fail ->
             catch Callback:terminate({http_status, Status}, State#state.cb_state),
             {stop, {http_status, Status}, anonymize(State)}
     end;
-
-handle_info({Proto, _Sock, {http_header, _, 'Location', _, Location}}, State) when Proto == http; Proto == ssl ->
-    Uri = parse_uri(binary_to_list(Location)),
-    {noreply, State#state{snapshot_uri=Uri}, 0};
-handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod, cb_mod=Callback, cb_state=CbState}=State) when Proto == http; Proto == ssl ->
+handle_info({Proto, _Sock, {http_header, _, 'Location', _, Location}}, State)
+  when Proto == http; Proto == ssl ->
+    {noreply, State#state{snapshot_url=binary_to_list(Location)}, 0};
+handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=State)
+  when Proto == http; Proto == ssl ->
     setopts(Mod, Sock, [{active, once}]),
     case [Key, Val] of
         [<<"Instance-Name">>, InstanceName] ->
-            case notify_callback({instance_name, InstanceName}, Callback, CbState) of
-                {ok, CbState1} ->
-                    {noreply, State#state{cb_state=CbState1}};
-                {Err, CbState1} ->
-                    {stop, Err, anonymize(State#state{cb_state=CbState1})}
-            end;
+            notify_callback({instance_name, InstanceName}, State);
         ['Transfer-Encoding', <<"chunked">>] ->
             {noreply, State#state{encoding=chunked}};
         ['Content-Length', ContentLength] ->
@@ -163,8 +194,9 @@ handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod, c
         _ ->
             {noreply, State}
     end;
-
-handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod, encoding=Enc, content_length=Len}=State) when Proto == http; Proto == ssl ->
+handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod,
+                                            encoding=Enc, content_length=Len}=State)
+  when Proto == http; Proto == ssl ->
     case [Enc, Len] of
         [chunked, _] ->
             setopts(Mod, Sock, [{active, once}, {packet, raw}]),
@@ -176,7 +208,6 @@ handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod
             catch Callback:terminate({error, unrecognized_encoding}, State#state.cb_state),
             {stop, {error, unrecognized_encoding}, anonymize(State)}
     end;
-
 handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
                                         cb_state=CbState0,
                                         sock_mod=Mod,
@@ -214,51 +245,38 @@ handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
             {stop, Err, anonymize(State)}
     end;
 
-handle_info(ClosedTuple, State)
-when is_tuple(ClosedTuple) andalso
-    (element(1, ClosedTuple) == tcp_closed orelse
-     element(1, ClosedTuple) == ssl_closed orelse
-     element(1, ClosedTuple) == tcp_error orelse
-     element(1, ClosedTuple) == ssl_error) ->
+handle_info(ClosedTuple, State) when is_tuple(ClosedTuple) andalso
+                                     (element(1, ClosedTuple) == tcp_closed orelse
+                                      element(1, ClosedTuple) == ssl_closed orelse
+                                      element(1, ClosedTuple) == tcp_error orelse
+                                      element(1, ClosedTuple) == ssl_error) ->
     close(State);
 
-handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, uri=DefaultUri, snapshot_uri=SnapshotUri, cb_mod=Callback, cb_state=CbState}=State) ->
+handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, url=DefaultUrl, snapshot_url=SnapshotUri, cb_mod=Callback, cb_state=CbState}=State) ->
     catch OldSockMod:close(OldSock),
     {Opts, CbState} = Callback:current_opts(CbState),
-    Uri =
+    Url =
         case is_snapshot_redirect(SnapshotUri, Opts) of
               true ->
                 IsRedirect = true,
                 SnapshotUri;
               false ->
                 IsRedirect = false,
-                DefaultUri
+                DefaultUrl
           end,
-    case connect(Uri) of
-        {ok, Mod, Sock} ->
+    case connect(Url) of
+        {ok, Mod, Sock, Uri} ->
             case send_req(IsRedirect, Sock, Mod, Uri, Callback, CbState) of
                 {ok, CbState1} ->
                     {noreply, State#state{sock=Sock, sock_mod=Mod, cb_state=CbState1, buffer = <<>>}};
                 {error, Err, CbState1} ->
-                    case notify_callback(Err, Callback, CbState1) of
-                        {ok, CbState2} ->
-                            {noreply, State#state{cb_state=CbState2, buffer = <<>>}, 0};
-                        {Err, CbState2} ->
-                            catch Callback:terminate(Err, CbState2),
-                            {stop, Err, anonymize(State)}
-                    end;
+                    notify_callback(Err, State#state{cb_state=CbState1});
                 {Err, CbState1} ->
                     catch Callback:terminate(Err, CbState1),
                     {stop, Err, anonymize(State)}
             end;
         Err ->
-            case notify_callback(Err, Callback, CbState) of
-                {ok, CbState1} ->
-                    {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
-                {Err, CbState1} ->
-                    catch Callback:terminate(Err, CbState1),
-                    {stop, Err, anonymize(State)}
-            end
+            notify_callback(Err, State)
     end;
 
 handle_info(_Message, State) ->
@@ -280,26 +298,25 @@ close(State) ->
 disconnect(State) ->
     handle_close_or_disconnect(disconnect, State).
 
-handle_close_or_disconnect(Event, #state{cb_mod=Callback, cb_state=CbState}=State)
+handle_close_or_disconnect(Event, State)
   when Event == close; Event == disconnect ->
-    case catch Callback:handle_event(Event, CbState) of
-        {noreply, CbState1} ->
-            {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
-        {stop, Reason, CbState1} ->
-            catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, anonymize(State)};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, anonymize(State)}
+    case notify_callback(Event, State) of
+        {noreply, State1} ->
+            {noreply, State1#state{buffer = <<>>}, 0};
+        Else ->
+            Else
     end.
 
-connect({Proto, _Pass, Host, Port, _Path, _}) ->
+connect(Url) when is_list(Url) ->
+    Uri = parse_uri(Url),
+    connect(Uri);
+connect({Proto, _Pass, Host, Port, _Path, _}=Uri) ->
     Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
     case gen_tcp:connect(Host, Port, Opts, 5000) of
         {ok, Sock} ->
             case ssl_upgrade(Proto, Sock) of
                 {ok, Mod, Sock1} ->
-                    {ok, Mod, Sock1};
+                    {ok, Mod, Sock1, Uri};
                 Err ->
                     gen_tcp:close(Sock),
                     Err
@@ -308,16 +325,31 @@ connect({Proto, _Pass, Host, Port, _Path, _}) ->
             Err
     end.
 
-notify_callback(Err, Callback, CbState) ->
-    case catch Callback:handle_event(Err, CbState) of
+notify_callback(Message, #state{cb_mod=CbModule, cb_state=CbState, sock=Sock,
+                                sock_mod=SockMod}=State) ->
+    try CbModule:handle_event(Message, CbState) of
         {noreply, CbState1} ->
-            {ok, CbState1};
+            {noreply, State#state{cb_state=CbState1}};
+        {connect_url, Url, CbState1} ->
+            catch SockMod:close(Sock),
+            {noreply, State#state{url=Url,
+                                  snapshot_url=undefined,
+                                  sock=undefined,
+                                  sock_mod=undefined,
+                                  encoding=undefined,
+                                  content_length=undefined,
+                                  buffer = <<>>,
+                                  cb_state=CbState1}, 0};
         {stop, Reason, CbState1} ->
-            {Reason, CbState1};
-        {'EXIT', Err} ->
-            {Err, CbState}
+            catch CbModule:terminate(Reason, CbState1),
+            {stop, Reason, anonymize(State#state{cb_state=CbState1})}
+    catch
+        _:Error ->
+            catch CbModule:terminate(Error, CbState),
+            {stop, Error, anonymize(State)}
     end.
 
+parse_uri(undefined) -> undefined;
 parse_uri(Url) ->
     case http_uri:parse(Url) of
         {ok, Uri} -> Uri;
@@ -357,7 +389,7 @@ authorization(UserPass) ->
     [<<"Authorization: Basic ">>, Auth, <<"\r\n">>].
 
 send_req(IsRedirect, Sock, Mod, {_Proto, Pass, Host, _Port, Path, QS}, Callback, CbState) ->
-    case catch Callback:handle_event(connect, CbState) of
+    try Callback:handle_event(connect, CbState) of
         {noreply, CbState1} ->
             Req = case IsRedirect of
                       true ->
@@ -376,9 +408,10 @@ send_req(IsRedirect, Sock, Mod, {_Proto, Pass, Host, _Port, Path, QS}, Callback,
                     {error, Err, CbState3}
             end;
         {stop, Reason, CbState1} ->
-            {Reason, CbState1};
-        {'EXIT', Err} ->
-            {Err, CbState}
+            {Reason, CbState1}
+    catch
+        _:Error ->
+            {Error, CbState}
     end.
 
 setopts(gen_tcp, Sock, Opts) ->
@@ -413,13 +446,18 @@ lockstep_response(307) ->
     success;
 lockstep_response(Status) when Status >= 200 andalso Status < 300 ->
     success;
+lockstep_response(Status) when Status >= 400 andalso Status < 500 ->
+    client_error;
+lockstep_response(Status) when Status >= 500 andalso Status < 600 ->
+    server_error;
 lockstep_response(_) ->
     fail.
 
 %% Remove credentials in the URL if any
 %%
-anonymize(State=#state{uri=Uri, snapshot_uri=SnapUri}) ->
-    State#state{uri=hide_pass(Uri), snapshot_uri=hide_pass(SnapUri)}.
+anonymize(State=#state{url=Url, snapshot_url=SnapUrl}) ->
+    State#state{url=hide_pass(parse_uri(Url)),
+                snapshot_url=hide_pass(parse_uri(SnapUrl))}.
 
 hide_pass(undefined) -> undefined;
 hide_pass({Scheme, UserInfo, Host, Port, Path, Query}) ->
