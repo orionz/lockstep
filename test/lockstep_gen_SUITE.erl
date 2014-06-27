@@ -185,10 +185,14 @@ reconnect(Config) ->
         new_connection ->
             [{count, 1}] = ets:lookup(Tid, count),
             loop ! close_connection
+    after 100 ->
+            throw(timeout)
     end,
     receive
         new_connection ->
             [{count, 2}] = ets:lookup(Tid, count)
+    after 100 ->
+            throw(timeout)
     end,
     bye = gen_lockstep:call(Pid, stop_test, 1000),
     Config.
@@ -205,11 +209,15 @@ timeout(Config) ->
         new_connection ->
             [{count, 1}] = ets:lookup(Tid, count),
             loop ! close
+    after 100 ->
+            throw(timeout)
     end,
     receive
         new_connection ->
             [{count, 2}] = ets:lookup(Tid, count),
             loop ! close
+    after 100 ->
+            throw(timeout)
     end,
     bye = gen_lockstep:call(Pid, stop_test, 1000),
     Config.
