@@ -127,23 +127,24 @@ init([Callback, LockstepUrl, InitParams]) ->
         {error, Err} ->
             {stop, {error, Err}, undefined};
         _Uri ->
-            case catch Callback:init(InitParams) of
+            try Callback:init(InitParams) of
                 {ok, CbState} ->
                     {ok, #state{
-                        cb_state = CbState,
-                        cb_mod = Callback,
-                        url = LockstepUrl,
-                        buffer = <<>>
-                    }, 0};
+                            cb_state = CbState,
+                            cb_mod = Callback,
+                            url = LockstepUrl,
+                            buffer = <<>>
+                           }, 0};
                 {stop, Err} ->
-                    {stop, Err};
-                {'EXIT', Err} ->
                     {stop, Err}
+            catch
+                _Error:_Reason = Error ->
+                    {stop, Error}
             end
     end.
 
 handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) ->
-    case catch Callback:handle_call(Msg, From, CbState) of
+    try Callback:handle_call(Msg, From, CbState) of
         {reply, Reply, CbState1} ->
             {reply, Reply, State#state{cb_state=CbState1}};
         {stop, Reason, CbState1} ->
@@ -151,12 +152,12 @@ handle_call({call, Msg}, From, #state{cb_mod=Callback, cb_state=CbState}=State) 
             {stop, Reason, anonymize(State#state{cb_state=CbState1})};
         {stop, Reason, Reply, CbState1} ->
             catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, Reply, anonymize(State#state{cb_state=CbState1})};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, anonymize(State)}
+            {stop, Reason, Reply, anonymize(State#state{cb_state=CbState1})}
+    catch
+        _Error:_Reason = Error ->
+            catch Callback:terminate(Error, CbState),
+            {stop, Error, anonymize(State)}
     end;
-
 handle_call(_Message, _From, State) ->
     {reply, error, State}.
 
@@ -177,7 +178,6 @@ handle_info({Proto, Sock, {http_response, _Vsn, Status, _}}, #state{sock_mod=Mod
             catch Callback:terminate({http_status, Status}, State#state.cb_state),
             {stop, {http_status, Status}, anonymize(State)}
     end;
-
 handle_info({Proto, _Sock, {http_header, _, 'Location', _, Location}}, State)
   when Proto == http; Proto == ssl ->
     {noreply, State#state{snapshot_url=binary_to_list(Location)}, 0};
@@ -194,8 +194,9 @@ handle_info({Proto, Sock, {http_header, _, Key, _, Val}}, #state{sock_mod=Mod}=S
         _ ->
             {noreply, State}
     end;
-
-handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod, encoding=Enc, content_length=Len}=State) when Proto == http; Proto == ssl ->
+handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod=Mod,
+                                            encoding=Enc, content_length=Len}=State)
+  when Proto == http; Proto == ssl ->
     case [Enc, Len] of
         [chunked, _] ->
             setopts(Mod, Sock, [{active, once}, {packet, raw}]),
@@ -207,7 +208,6 @@ handle_info({Proto, Sock, http_eoh}, #state{cb_mod=Callback, sock=Sock, sock_mod
             catch Callback:terminate({error, unrecognized_encoding}, State#state.cb_state),
             {stop, {error, unrecognized_encoding}, anonymize(State)}
     end;
-
 handle_info({Proto, Sock, Data}, #state{cb_mod=Callback,
                                         cb_state=CbState0,
                                         sock_mod=Mod,
@@ -298,17 +298,13 @@ close(State) ->
 disconnect(State) ->
     handle_close_or_disconnect(disconnect, State).
 
-handle_close_or_disconnect(Event, #state{cb_mod=Callback, cb_state=CbState}=State)
+handle_close_or_disconnect(Event, State)
   when Event == close; Event == disconnect ->
-    case catch Callback:handle_event(Event, CbState) of
-        {noreply, CbState1} ->
-            {noreply, State#state{cb_state=CbState1, buffer = <<>>}, 0};
-        {stop, Reason, CbState1} ->
-            catch Callback:terminate(Reason, CbState1),
-            {stop, Reason, anonymize(State)};
-        {'EXIT', Err} ->
-            catch Callback:terminate(Err, CbState),
-            {stop, Err, anonymize(State)}
+    case notify_callback(Event, State) of
+        {noreply, State1} ->
+            {noreply, State1#state{buffer = <<>>}, 0};
+        Else ->
+            Else
     end.
 
 connect(UrlFun) when is_function(UrlFun) ->
@@ -334,7 +330,7 @@ connect({Proto, _Pass, Host, Port, _Path, _}=Uri) ->
 
 notify_callback(Message, #state{cb_mod=CbModule, cb_state=CbState, sock=Sock,
                                 sock_mod=SockMod}=State) ->
-    case catch CbModule:handle_event(Message, CbState) of
+    try CbModule:handle_event(Message, CbState) of
         {noreply, CbState1} ->
             {noreply, State#state{cb_state=CbState1}};
         {connect_url, Url, CbState1} ->
@@ -349,8 +345,9 @@ notify_callback(Message, #state{cb_mod=CbModule, cb_state=CbState, sock=Sock,
                                   cb_state=CbState1}, 0};
         {stop, Reason, CbState1} ->
             catch CbModule:terminate(Reason, CbState1),
-            {stop, Reason, anonymize(State#state{cb_state=CbState1})};
-        {'EXIT', Error} ->
+            {stop, Reason, anonymize(State#state{cb_state=CbState1})}
+    catch
+        _Error:_Details=Error ->
             catch CbModule:terminate(Error, CbState),
             {stop, Error, anonymize(State)}
     end.
@@ -397,7 +394,7 @@ authorization(UserPass) ->
     [<<"Authorization: Basic ">>, Auth, <<"\r\n">>].
 
 send_req(IsRedirect, Sock, Mod, {_Proto, Pass, Host, _Port, Path, QS}, Callback, CbState) ->
-    case catch Callback:handle_event(connect, CbState) of
+    try Callback:handle_event(connect, CbState) of
         {noreply, CbState1} ->
             Req = case IsRedirect of
                       true ->
@@ -416,9 +413,10 @@ send_req(IsRedirect, Sock, Mod, {_Proto, Pass, Host, _Port, Path, QS}, Callback,
                     {error, Err, CbState3}
             end;
         {stop, Reason, CbState1} ->
-            {Reason, CbState1};
-        {'EXIT', Err} ->
-            {Err, CbState}
+            {Reason, CbState1}
+    catch
+        _Error:_Reason = Error ->
+            {Error, CbState}
     end.
 
 setopts(gen_tcp, Sock, Opts) ->
