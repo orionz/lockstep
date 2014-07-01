@@ -1,7 +1,7 @@
 {application, lockstep,
  [
   {description, "follows mg replication"},
-  {vsn, git},
+  {vsn, "semver"},
   {registered, []},
   {applications, [
       kernel,
