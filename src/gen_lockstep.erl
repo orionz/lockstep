@@ -374,8 +374,10 @@ req(Pass, Host, Path, QS) ->
         <<"Host: ">>, Host ,<<"\r\n\r\n">>
     ]).
 
-qs(SeqNo, Opts) when is_integer(SeqNo)->
-    [<<"?since=">>, integer_to_list(SeqNo)] ++
+qs(SeqNo, Opts) when is_integer(SeqNo) ->
+    qs(integer_to_list(SeqNo), Opts);
+qs(SeqNo, Opts) when is_list(SeqNo)->
+    [<<"?since=">>, SeqNo] ++
     [[<<"&">>, to_binary(Key), <<"=">>, to_binary(Val)] || {Key, Val} <- Opts, Val =/= undefined].
 
 authorization([]) -> [];
