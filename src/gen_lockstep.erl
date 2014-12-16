@@ -24,6 +24,7 @@
 %% OTHER DEALINGS IN THE SOFTWARE.
 -module(gen_lockstep).
 -behaviour(gen_server).
+-include_lib("eunit/include/eunit.hrl").
 
 %% API
 -export([start_link/3,
@@ -374,10 +375,8 @@ req(Pass, Host, Path, QS) ->
         <<"Host: ">>, Host ,<<"\r\n\r\n">>
     ]).
 
-qs(SeqNo, Opts) when is_integer(SeqNo) ->
-    qs(integer_to_list(SeqNo), Opts);
-qs(Since, Opts) when is_list(Since)->
-    [<<"?since=">>, to_binary(http_uri:encode(Since))] ++
+qs(Since, Opts) ->
+    [<<"?since=">>, to_binary(Since)] ++
     [[<<"&">>, to_binary(Key), <<"=">>, to_binary(Val)] || {Key, Val} <- Opts, Val =/= undefined].
 
 authorization([]) -> [];
@@ -469,3 +468,15 @@ hide_pass({Scheme, UserInfo, Host, Port, Path, Query}) ->
         "" -> ""
     end,
     {Scheme, UInfo, Host, Port, Path, Query}.
+
+%% Test
+qs_test() ->
+    ?assertEqual([<<"?since=">>, <<"5000">>], qs(5000, [])),
+    ?assertEqual([<<"?since=">>, <<"5:5000">>], qs("5:5000", [])),
+    ?assertEqual([<<"?since=">>, <<"5:5000">>], qs(<<"5:5000">>, [])),
+    ?assertEqual([<<"?since=">>, <<"5000">>], qs(5000, [])),
+    ?assertEqual([<<"?since=">>, <<"5000">>], qs(5000, [])),
+    ?assertEqual([<<"?since=">>, <<"2:55848933">>,
+                  [<<"&">>, <<"option1">>, <<"=">>, <<"10">>]],
+                 qs(<<"2:55848933">>, [{<<"option1">>, <<"10">>}])),
+    ok.
