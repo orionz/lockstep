@@ -35,7 +35,8 @@
 %% Types
 -type url() :: list().
 -type lockstep_message() :: [{binary(), term()}].
--export_type([url/0, lockstep_message/0]).
+-type seq_no() :: undefined | string().
+-export_type([url/0, lockstep_message/0, seq_no/0]).
 
 
 -callback init(Url) ->
@@ -69,7 +70,7 @@
                                       Url :: url(),
                                       Reason :: term().
 -callback current_seq_no(HandlerState) ->
-    {NewSeqNumber, HandlerState} when NewSeqNumber :: non_neg_integer(),
+    {NewSeqNumber, HandlerState} when NewSeqNumber :: seq_no(),
                                       HandlerState :: term().
 -callback current_opts(HandlerState) ->
     {Opts, HandlerState} when Opts :: [{update, boolean()}|{binary(), binary()}],
