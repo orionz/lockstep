@@ -277,6 +277,9 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, url=DefaultUrl, s
                     catch Callback:terminate(Err, CbState1),
                     {stop, Err, anonymize(State)}
             end;
+        {error, reconnect_failed = Err} ->
+            catch Callback:terminate(Err, CbState),
+            {stop, Err, anonymize(State)};
         Err ->
             notify_callback(Err, State)
     end;
@@ -309,12 +312,21 @@ handle_close_or_disconnect(Event, State)
             Else
     end.
 
+%% attempt to reconnect every 5s for 2 minutes
+-define(RECONNECT_TIMEOUT, timer:seconds(5)).
+-define(RECONNECT_ATTEMPTS, 24).
+
 connect(Url) when is_list(Url) ->
     Uri = parse_uri(Url),
-    connect(Uri);
-connect({Proto, _Pass, Host, Port, _Path, _}=Uri) ->
+    connect(Uri, ?RECONNECT_ATTEMPTS);
+connect(Uri) ->
+    connect(Uri, ?RECONNECT_ATTEMPTS).
+
+connect(_Uri, 0) ->
+    {error, reconnect};
+connect({Proto, _Pass, Host, Port, _Path, _}=Uri, Attempts) ->
     Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
-    case gen_tcp:connect(Host, Port, Opts, 5000) of
+    case gen_tcp:connect(Host, Port, Opts, ?RECONNECT_TIMEOUT) of
         {ok, Sock} ->
             case ssl_upgrade(Proto, Sock) of
                 {ok, Mod, Sock1} ->
@@ -323,6 +335,8 @@ connect({Proto, _Pass, Host, Port, _Path, _}=Uri) ->
                     gen_tcp:close(Sock),
                     Err
             end;
+        {error, timeout} ->
+            connect(Uri, Attempts - 1);
         Err ->
             Err
     end.
