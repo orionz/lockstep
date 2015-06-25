@@ -277,7 +277,7 @@ handle_info(timeout, #state{sock_mod=OldSockMod, sock=OldSock, url=DefaultUrl, s
                     catch Callback:terminate(Err, CbState1),
                     {stop, Err, anonymize(State)}
             end;
-        {error, reconnect_failed = Err} ->
+        {error, too_many_reconnect_attempts = Err} ->
             catch Callback:terminate(Err, CbState),
             {stop, Err, anonymize(State)};
         Err ->
@@ -323,7 +323,7 @@ connect(Uri) ->
     connect(Uri, ?RECONNECT_ATTEMPTS).
 
 connect(_Uri, 0) ->
-    {error, reconnect};
+    {error, too_many_reconnect_attempts};
 connect({Proto, _Pass, Host, Port, _Path, _}=Uri, Attempts) ->
     Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
     case gen_tcp:connect(Host, Port, Opts, ?RECONNECT_TIMEOUT) of

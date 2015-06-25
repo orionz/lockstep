@@ -17,14 +17,17 @@ all() ->
     ,connect_and_chunked
     ,reconnect
     ,timeout
+    ,connect_timeout
     ,unauthorized
     ].
 
 init_per_suite(Config) ->
     application:load(lockstep),
+    application:start(meck),
     Config.
 
 end_per_suite(Config) ->
+    application:stop(meck),
     Config.
 
 init_per_testcase(connect_redirect, Config) ->
@@ -72,6 +75,18 @@ init_per_testcase(timeout, Config) ->
     [{url, Url},
      {server, Server},
      {tid, Tid}|Config];
+init_per_testcase(connect_timeout, Config) ->
+    Tid = ets:new(connect_timeout, [public]),
+    ets:insert(Tid, {count, 0}),
+    meck:new(gen_tcp, [unstick, passthrough]),
+    meck:expect(gen_tcp, connect, fun(_,_,_,Timeout) ->
+                                          timer:sleep(Timeout),
+                                          {error, timeout}
+                                  end),
+    {Server, Url} = bad_server(),
+    [{url, Url},
+     {server, Server},
+     {tid, Tid}|Config];
 init_per_testcase(unauthorized, Config) ->
     Tid = ets:new(unauthorized, [public]),
     {Server, Url} = get_server(fun(Req) ->
@@ -102,6 +117,11 @@ end_per_testcase(connect_and_chunked, Config) ->
 end_per_testcase(timeout, Config) ->
     ets:delete(?config(tid, Config)),
     mochiweb_http:stop(?config(server, Config)),
+    Config;
+end_per_testcase(connect_timeout, Config) ->
+    ets:delete(?config(tid, Config)),
+    meck:unload(gen_tcp),
+    exit(?config(server, Config), kill),
     Config;
 end_per_testcase(reconnect, Config) ->
     ets:delete(?config(tid, Config)),
@@ -212,6 +232,28 @@ timeout(Config) ->
     end,
     bye = gen_lockstep:call(Pid, stop_test, 1000),
     Config.
+
+connect_timeout(Config) ->
+    % Check timeout
+    register(connect_timeout, self()),
+    Tid = ?config(tid, Config),
+    {ok, Pid} = gen_lockstep:start_link(lockstep_gen_callback,
+                                        ?config(url, Config), [Tid]),
+    true = is_pid(Pid) and is_process_alive(Pid),
+    %% ok = gen_lockstep:call(Pid, ringo_starr, 1000),
+    process_flag(trap_exit, true),
+    receive
+        {'EXIT', _Pid, too_many_reconnect_attempts} ->
+            ok;
+        Whatever ->
+            ct:pal("recieved ~p", [Whatever]),
+            throw(connected)
+    after 300000 ->
+            throw(timeout)
+    end,
+    process_flag(trap_exit, false),
+    Config.
+
 
 unauthorized(Config) ->
     Tid = ?config(tid, Config),
@@ -347,6 +389,19 @@ get_server(CallbackFun) ->
     Port = mochiweb_socket_server:get(Server, port),
     Url = "http://127.0.0.1:" ++ integer_to_list(Port),
     {Server, Url}.
+
+bad_server() ->
+    Me = self(),
+    Pid = spawn(fun()->
+                        {ok, LSock} = gen_tcp:listen(0, []),
+                        {ok, Port} = inet:port(LSock),
+                        Me ! {port, Port},
+                        timer:sleep(1200000)
+                end),
+    receive
+        {port, Port} ->
+            {Pid, "http://127.0.0.1:" ++ integer_to_list(Port)}
+    end.
 
 wait_for_value(Key, Tid, Timeout) ->
     wait_for_value(Key, Tid, Timeout, 1).
