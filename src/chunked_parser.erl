@@ -38,6 +38,9 @@ parse_msgs(Data, Callback, CbState) ->
                     parse_msgs(Rest1, Callback, CbState);
                 {ok, Chunk, Rest1} ->
                     case (catch mochijson2:decode(Chunk)) of
+                        {struct, [{<<"heartbeat">>, true}]} ->
+                            Callback:handle_event(heartbeat, CbState),
+                            parse_msgs(Rest1, Callback, CbState);
                         {struct, Props} ->
                             case catch Callback:handle_msg(Props, CbState) of
                                 {noreply, CbState1} ->
