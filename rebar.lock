@@ -1,4 +1,6 @@
-[{<<"meck">>,
+[{<<"certifi">>,{pkg,<<"certifi">>,<<"0.4.0">>},0},
+ {<<"idna">>,{pkg,<<"idna">>,<<"2.0.0">>},0},
+ {<<"meck">>,
   {git,"git@git.herokai.com:meck.git",
        {ref,"2eb19524a0cf33a0fc67fed766679c93d363ceee"}},
   0},
@@ -9,4 +11,5 @@
  {<<"rebar_vsn_plugin">>,
   {git,"https://github.com/erlware/rebar_vsn_plugin.git",
        {ref,"fd40c960c7912193631d948fe962e1162a8d1334"}},
-  0}].
+  0},
+ {<<"ssl_verify_fun">>,{pkg,<<"ssl_verify_fun">>,<<"1.1.0">>},0}].

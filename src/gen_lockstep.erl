@@ -328,7 +328,7 @@ connect({Proto, _Pass, Host, Port, _Path, _}=Uri, Attempts) ->
     Opts = [binary, {packet, http_bin}, {packet_size, 1024 * 1024}, {recbuf, 1024 * 1024}, {active, once}],
     case gen_tcp:connect(Host, Port, Opts, ?RECONNECT_TIMEOUT) of
         {ok, Sock} ->
-            case ssl_upgrade(Proto, Sock) of
+            case ssl_upgrade(Proto, Host, Sock) of
                 {ok, Mod, Sock1} ->
                     {ok, Mod, Sock1, Uri};
                 Err ->
@@ -372,16 +372,25 @@ parse_uri(Url) ->
         Uri -> Uri
     end.
 
-ssl_upgrade(https, Sock) ->
-    case ssl:connect(Sock, []) of
+ssl_upgrade(https, Hostname, Sock) ->
+    SslOptions = ssl_opts(Hostname),
+    case ssl:connect(Sock, SslOptions) of
         {ok, SslSock} ->
             {ok, ssl, SslSock};
         Err ->
             Err
     end;
 
-ssl_upgrade(http, Sock) ->
+ssl_upgrade(http, _Hostname, Sock) ->
     {ok, gen_tcp, Sock}.
+
+ssl_opts(Hostname) ->
+    VerifyFun = {fun ssl_verify_hostname:verify_fun/3, [{check_hostname, Hostname}]},
+    CACerts = certifi:cacerts(),
+    [{verify, verify_peer},
+     {depth, 2},
+     {cacerts, CACerts},
+     {verify_fun, VerifyFun}].
 
 req(Pass, Host, Path, QS) ->
     iolist_to_binary([

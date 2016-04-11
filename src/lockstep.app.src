@@ -9,7 +9,10 @@
       sasl,
       crypto,
       public_key,
-      ssl
+      ssl,
+      certifi,
+      idna,
+      ssl_verify_fun
   ]},
   {env, [
          {idle_timeout, 60000}
