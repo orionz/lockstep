@@ -133,7 +133,7 @@ compare([{Key, Val}|Rest], FromParser) when is_atom(Key) ->
     compare(Rest, FromParser).
 
 get_message() ->
-    {Mega, Secs, _} = now(),
+    {Mega, Secs, _} = os:timestamp(),
     UnixTimestamp = Mega*1000000 + Secs,
     [{txid, random:uniform(10000*10000)}, % pos_int
      {since, random:uniform(10000*10000)}, % pos_int
