@@ -385,12 +385,17 @@ ssl_upgrade(http, _Hostname, Sock) ->
     {ok, gen_tcp, Sock}.
 
 ssl_opts(Hostname) ->
-    VerifyFun = {fun ssl_verify_hostname:verify_fun/3, [{check_hostname, Hostname}]},
-    CACerts = certifi:cacerts(),
-    [{verify, verify_peer},
-     {depth, 2},
-     {cacerts, CACerts},
-     {verify_fun, VerifyFun}].
+    case application:get_env(lockstep, verify_ssl, false) of
+        true ->
+            VerifyFun = {fun ssl_verify_hostname:verify_fun/3, [{check_hostname, Hostname}]},
+            CACerts = certifi:cacerts(),
+            [{verify, verify_peer},
+             {depth, 2},
+             {cacerts, CACerts},
+             {verify_fun, VerifyFun}];
+        _ ->
+            []
+    end.
 
 req(Pass, Host, Path, QS) ->
     iolist_to_binary([
