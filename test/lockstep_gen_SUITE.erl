@@ -443,7 +443,7 @@ future(Seconds) ->
       calendar:now_to_datetime(os:timestamp())) + Seconds.
 
 get_message() ->
-    {Mega, Secs, _} = now(),
+    {Mega, Secs, _} = os:timestamp(),
     UnixTimestamp = Mega*1000000 + Secs,
     [{txid, random:uniform(10000*10000)}, % pos_int
      {since, random:uniform(10000*10000)}, % pos_int
