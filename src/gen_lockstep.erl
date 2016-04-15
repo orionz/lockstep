@@ -392,6 +392,7 @@ ssl_opts(Hostname) ->
             [{verify, verify_peer},
              {depth, 2},
              {cacerts, CACerts},
+             {server_name_indication, Hostname},
              {verify_fun, VerifyFun}];
         _ ->
             []
