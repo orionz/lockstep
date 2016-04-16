@@ -373,7 +373,8 @@ parse_uri(Url) ->
     end.
 
 ssl_upgrade(https, Hostname, Sock) ->
-    SslOptions = ssl_opts(Hostname),
+    VerifySsl = application:get_env(lockstep, verify_ssl, false),
+    SslOptions = ssl_opts(VerifySsl, Hostname),
     case ssl:connect(Sock, SslOptions) of
         {ok, SslSock} ->
             {ok, ssl, SslSock};
@@ -384,9 +385,9 @@ ssl_upgrade(https, Hostname, Sock) ->
 ssl_upgrade(http, _Hostname, Sock) ->
     {ok, gen_tcp, Sock}.
 
-ssl_opts(Hostname) ->
-    case application:get_env(lockstep, verify_ssl, false) of
-        true ->
+ssl_opts("true", Hostname) ->
+    ssl_opts(true, Hostname);
+ssl_opts(true, Hostname) ->
             VerifyFun = {fun ssl_verify_hostname:verify_fun/3, [{check_hostname, Hostname}]},
             CACerts = certifi:cacerts(),
             [{verify, verify_peer},
@@ -394,9 +395,8 @@ ssl_opts(Hostname) ->
              {cacerts, CACerts},
              {server_name_indication, Hostname},
              {verify_fun, VerifyFun}];
-        _ ->
-            []
-    end.
+ssl_opts(_, _) ->
+    [].
 
 req(Pass, Host, Path, QS) ->
     iolist_to_binary([
