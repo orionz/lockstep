@@ -5,3 +5,4 @@ lockstep.app
 logs/
 rebar
 .rebarinfo
+_build
