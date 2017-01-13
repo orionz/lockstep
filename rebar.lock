@@ -1,15 +1,22 @@
+{"1.1.0",
 [{<<"certifi">>,{pkg,<<"certifi">>,<<"0.4.0">>},0},
  {<<"idna">>,{pkg,<<"idna">>,<<"2.0.0">>},0},
  {<<"meck">>,
-  {git,"git@git.herokai.com:meck.git",
+  {git,"ssh://git@git.herokai.com:2222/meck.git",
        {ref,"2eb19524a0cf33a0fc67fed766679c93d363ceee"}},
   0},
  {<<"mochiweb">>,
-  {git,"git@git.herokai.com:mochiweb.git",
+  {git,"ssh://git@git.herokai.com:2222/mochiweb.git",
        {ref,"3d331c66cca944dbf007cb024cfd109289f59d9b"}},
   0},
  {<<"rebar_vsn_plugin">>,
   {git,"https://github.com/erlware/rebar_vsn_plugin.git",
        {ref,"fd40c960c7912193631d948fe962e1162a8d1334"}},
   0},
- {<<"ssl_verify_fun">>,{pkg,<<"ssl_verify_fun">>,<<"1.1.0">>},0}].
+ {<<"ssl_verify_fun">>,{pkg,<<"ssl_verify_fun">>,<<"1.1.0">>},0}]}.
+[
+{pkg_hash,[
+ {<<"certifi">>, <<"A7966EFB868B179023618D29A407548F70C52466BF1849B9E8EBD0E34B7EA11F">>},
+ {<<"idna">>, <<"13DC2C407F16FF24648AF98F529CEC5B957E2FAFA849DF11D52D82E11529C4C1">>},
+ {<<"ssl_verify_fun">>, <<"EDEE20847C42E379BF91261DB474FFBE373F8ACB56E9079ACB6038D4E0BF414F">>}]}
+].
