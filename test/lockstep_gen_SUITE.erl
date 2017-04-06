@@ -15,6 +15,7 @@ all() ->
      connect_redirect
     ,connect_content_length
     ,connect_and_chunked
+    ,connect_sends_client_id
     ,reconnect
     ,timeout
     ,connect_timeout
@@ -52,6 +53,14 @@ init_per_testcase(connect_and_chunked, Config) ->
     ets:insert(Tid, {count, 0}),
     {Server, Url} = get_server(fun(Req) ->
                                        connect_and_chunked_loop(Req, Tid)
+                               end),
+    [{url, Url},
+     {server, Server},
+     {tid, Tid}|Config];
+init_per_testcase(connect_sends_client_id, Config) ->
+    Tid = ets:new(connect_content_length, [public]),
+    {Server, Url} = get_server(fun(Req) ->
+                                       connect_content_length_loop(Req, Tid)
                                end),
     [{url, Url},
      {server, Server},
@@ -112,6 +121,10 @@ end_per_testcase(connect_content_length, Config) ->
 end_per_testcase(connect_and_chunked, Config) ->
     ets:delete(?config(tid, Config)),
     loop ! stop, % Kill the loop
+    mochiweb_http:stop(?config(server, Config)),
+    Config;
+end_per_testcase(connect_sends_client_id, Config) ->
+    ets:delete(?config(tid, Config)),
     mochiweb_http:stop(?config(server, Config)),
     Config;
 end_per_testcase(timeout, Config) ->
@@ -181,6 +194,22 @@ connect_and_chunked(Config) ->
     'GET' = proplists:get_value(method, Values),
     "/" = proplists:get_value(path, Values),
     [{"since", "0"}] = proplists:get_value(qs, Values),
+    Config.
+
+connect_sends_client_id(Config) ->
+    CurrentNode = atom_to_list(node()),
+    Tid = ?config(tid, Config),
+    {ok, Pid}  = gen_lockstep:start_link(lockstep_gen_callback,
+                                         ?config(url, Config), [Tid]),
+    true = is_pid(Pid) and is_process_alive(Pid),
+    bye = gen_lockstep:call(Pid, stop_test, 1000),
+    timer:sleep(1),
+    false = is_pid(Pid) and is_process_alive(Pid),
+    [{get, Values}] = wait_for_value(get, Tid, future(1)),
+    'GET' = proplists:get_value(method, Values),
+    "/" = proplists:get_value(path, Values),
+    [{"since", "0"}] = proplists:get_value(qs, Values),
+    CurrentNode = proplists:get_value(client_id, Values),
     Config.
 
 reconnect(Config) ->
@@ -277,9 +306,12 @@ connect_content_length_loop(Req, Tid) ->
     Method = Req:get(method),
     Path = Req:get(path),
     Query = Req:parse_qs(),
+    ClientID = Req:get_header_value("X-Client-ID"),
+    %% TODO
     ets:insert(Tid, {get, [{method, Method},
                            {path, Path},
-                           {qs, Query}]}),
+                           {qs, Query},
+                           {client_id, ClientID}]}),
     % We're going to send a single message to the server, and get it
     % back via the test callback module. Since it's Content-Length
     % we're closing the connection after we send it.
