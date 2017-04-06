@@ -402,6 +402,7 @@ req(Pass, Host, Path, QS) ->
     iolist_to_binary([
         <<"GET ">>, Path, QS, <<" HTTP/1.1\r\n">>,
         authorization(Pass),
+        client_id(),
         <<"Host: ">>, Host ,<<"\r\n\r\n">>
     ]).
 
@@ -418,6 +419,9 @@ authorization(UserPass) ->
             [User, Pass] -> base64:encode(User ++ ":" ++ Pass)
         end,
     [<<"Authorization: Basic ">>, Auth, <<"\r\n">>].
+
+client_id() ->
+  [<<"X-Client-ID: ">>, atom_to_list(node()), <<"\r\n">>].
 
 send_req(IsRedirect, Sock, Mod, {_Proto, Pass, Host, _Port, Path, QS}, Callback, CbState) ->
     try Callback:handle_event(connect, CbState) of

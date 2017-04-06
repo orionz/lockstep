@@ -307,7 +307,6 @@ connect_content_length_loop(Req, Tid) ->
     Path = Req:get(path),
     Query = Req:parse_qs(),
     ClientID = Req:get_header_value("X-Client-ID"),
-    %% TODO
     ets:insert(Tid, {get, [{method, Method},
                            {path, Path},
                            {qs, Query},
